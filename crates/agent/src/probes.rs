@@ -59,7 +59,7 @@ pub fn battery() -> Result<Option<Battery>, String> {
     let battery = battery.map_err(|e| e.to_string())?;
     Ok(Some(Battery {
         percent: f64::from(battery.state_of_charge().value) * 100.0,
-        charging: matches!(battery.state(), State::Charging | State::Full),
+        charging: battery.state() == State::Charging,
         health_percent: Some(f64::from(battery.state_of_health().value) * 100.0),
         cycles: battery.cycle_count(),
     }))

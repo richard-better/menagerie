@@ -113,8 +113,13 @@ fn generation(profile: &Path, current: &Path) -> Option<u64> {
             .parse()
             .ok()
     };
-    if std::fs::canonicalize(profile).ok()? == running {
-        return number(std::fs::read_link(profile).ok()?.file_name()?);
+    let head = std::fs::canonicalize(profile).ok();
+    if head.as_ref() == Some(&running)
+        && let Some(n) = std::fs::read_link(profile)
+            .ok()
+            .and_then(|link| number(link.file_name()?))
+    {
+        return Some(n);
     }
     let mut matches = std::fs::read_dir(profile.parent()?)
         .ok()?
