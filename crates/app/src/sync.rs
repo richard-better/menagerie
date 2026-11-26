@@ -122,10 +122,14 @@ pub fn plan(action: Action, fleet: &Fleet, name: &str, place: &Place) -> Result<
     if action == Action::Sync
         && let Some(repo) = fleet.repo_path()
     {
+        let branch = sh_quote(fleet.branch());
         let upstream = sh_quote(&format!("origin/{}", fleet.branch()));
-        let refspec = sh_quote(&format!("HEAD:{}", fleet.branch()));
+        let refspec = sh_quote(&format!("HEAD:refs/heads/{}", fleet.branch()));
         let script = format!(
             "cd {} || exit 1\n\
+             if [ \"$(git symbolic-ref --quiet --short HEAD)\" != {branch} ]; then\n\
+             \x20 echo \"Your checkout isn't on the configured branch. Switch to it first.\" >&2; exit 1\n\
+             fi\n\
              changes=$(git status --porcelain --untracked-files=all --ignore-submodules=none) || exit 1\n\
              if [ -n \"$changes\" ]; then\n\
              \x20 echo 'Your checkout has uncommitted changes. Commit or stash them first.' >&2; exit 1\n\
@@ -180,7 +184,20 @@ pub fn plan(action: Action, fleet: &Fleet, name: &str, place: &Place) -> Result<
         }
     };
     let script = match action {
-        Action::Sync => format!("cd {} && git pull --ff-only && {rebuild}", sh_path(&repo)),
+        // The machine has to be on the configured branch too, or a pull
+        // would quietly update some other branch.
+        Action::Sync => {
+            let branch = sh_quote(fleet.branch());
+            format!(
+                "cd {} || exit 1\n\
+                 if [ \"$(git symbolic-ref --quiet --short HEAD)\" != {branch} ]; then\n\
+                 \x20 echo \"The checkout on this machine isn't on the configured branch.\" >&2; exit 1\n\
+                 fi\n\
+                 git pull --ff-only origin {branch} || exit 1\n\
+                 {rebuild}",
+                sh_path(&repo)
+            )
+        }
         Action::Rollback => format!("cd {} && {rebuild}", sh_path(&repo)),
     };
     let label = match (action, place) {
@@ -350,8 +367,17 @@ fn run_step(step: &Step, events: &Sender<Event>, cancel: &Cancel) -> Result<(), 
             scope.spawn(|| forward(err, events));
         }
     });
+    let group = child.id();
     let status = child.wait().map_err(|e| format!("{}: {e}", step.label));
-    cancel.0.lock().unwrap_or_else(|e| e.into_inner()).group = 0;
+    {
+        let mut state = cancel.0.lock().unwrap_or_else(|e| e.into_inner());
+        // The leader can exit on SIGTERM while a child that ignores it lives
+        // on in the group: finish the group off before letting go of it.
+        if state.cancelled {
+            signal_group("-KILL", group);
+        }
+        state.group = 0;
+    }
     let status = status?;
     if status.success() {
         Ok(())
@@ -456,6 +482,35 @@ mod cancel_tests {
         assert!(took >= CANCEL_GRACE && took < CANCEL_GRACE * 3, "{took:?}");
         assert_eq!(rest.last(), Some(&Event::Done(Err("Cancelled".into()))));
         assert!(!rest.contains(&Event::Line("late".into())));
+    }
+
+    #[test]
+    fn cancel_kills_children_left_behind_by_the_leader() {
+        let dir = tempfile::tempdir().unwrap();
+        let marker = dir.path().join("late");
+        let (tx, rx) = std::sync::mpsc::channel();
+        let cancel = Cancel::default();
+        let script = format!(
+            "(trap '' TERM; exec >/dev/null 2>&1; sleep 4; touch {}) & echo ready; wait",
+            marker.display()
+        );
+        let handle = {
+            let cancel = cancel.clone();
+            std::thread::spawn(move || {
+                run(
+                    vec![Step::new("leader", "/bin/sh", &["-c", &script])],
+                    tx,
+                    cancel,
+                )
+            })
+        };
+        assert_eq!(rx.recv().unwrap(), Event::Line("▸ leader".into()));
+        assert_eq!(rx.recv().unwrap(), Event::Line("ready".into()));
+        cancel.cancel();
+        let _: Vec<Event> = rx.iter().collect();
+        handle.join().unwrap();
+        std::thread::sleep(std::time::Duration::from_secs(5));
+        assert!(!marker.exists(), "the stubborn child outlived Cancel");
     }
 
     #[test]
@@ -590,9 +645,19 @@ mod tests {
         assert_eq!(steps[0].label, "Check your checkout and push its commits");
         let step = &steps[1];
         assert_eq!(step.program, "/bin/sh");
-        assert_eq!(
-            step.args[1],
-            "cd ~/'dev/gh/richard-better/mac' && git pull --ff-only && sudo -A darwin-rebuild switch --flake '.#richard-m4-max'"
+        let script = &step.args[1];
+        assert!(
+            script.starts_with("cd ~/'dev/gh/richard-better/mac' || exit 1\n"),
+            "{script}"
+        );
+        assert!(script.contains("!= 'main' ]"), "{script}");
+        assert!(
+            script.contains("git pull --ff-only origin 'main' || exit 1\n"),
+            "{script}"
+        );
+        assert!(
+            script.ends_with("sudo -A darwin-rebuild switch --flake '.#richard-m4-max'"),
+            "{script}"
         );
         assert!(step.askpass);
     }
@@ -605,11 +670,11 @@ mod tests {
         assert_eq!(step.program, "ssh");
         assert_eq!(step.args[0], "-tt");
         assert_eq!(step.args[6], "richard@richard-hp-server");
-        let expected = concat!(
-            "sh -lc 'cd ~/'\\''dev/gh/richard-better/mac'\\'' && git pull --ff-only",
-            " && home-manager switch --flake '\\''.#richard@richard-hp-server'\\'''"
-        );
-        assert_eq!(step.args[7], expected);
+        let remote = &step.args[7];
+        assert!(remote.starts_with("sh -lc 'cd ~/"), "{remote}");
+        assert!(remote.contains("git pull --ff-only origin"), "{remote}");
+        assert!(remote.contains("home-manager switch --flake"), "{remote}");
+        assert!(remote.contains(".#richard@richard-hp-server"), "{remote}");
         assert!(!step.askpass);
         let rollback = plan(Action::Rollback, &fleet(), "richard-hp-server", &place).unwrap();
         assert_eq!(rollback.len(), 1, "rolling back doesn't touch the checkout");
@@ -689,6 +754,17 @@ mod tests {
         git(&work, &["commit", "-q", "--allow-empty", "-m", "one"]);
         git(&work, &["push", "-q", "origin", "HEAD:main"]);
         git(&work, &["fetch", "-q"]);
+
+        // On another branch: refused, even though it is clean.
+        git(&work, &["switch", "-q", "-c", "experiment"]);
+        let mut wrong = fleet();
+        wrong.repo = Some(work.to_string_lossy().into_owned());
+        let mut steps = plan(Action::Sync, &wrong, "richard-m4-max", &Place::Here).unwrap();
+        steps.truncate(1);
+        let (lines, result) = collect(steps);
+        assert!(result.is_err());
+        assert!(lines.iter().any(|l| l.contains("isn't on")), "{lines:?}");
+        git(&work, &["switch", "-q", "main"]);
 
         // Even with untracked files hidden by the user's config.
         git(&work, &["config", "status.showUntrackedFiles", "no"]);
