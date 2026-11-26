@@ -9,6 +9,7 @@ use gpui::{
 };
 
 pub mod assets;
+pub mod platform;
 pub mod store;
 pub mod theme;
 pub mod ui {
