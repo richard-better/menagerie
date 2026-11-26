@@ -137,8 +137,7 @@ impl Revision {
             Some(rev) => (rev, true),
             None => (stamp, false),
         };
-        let valid = rev.len() >= 7 && rev.chars().all(|c| c.is_ascii_hexdigit());
-        valid.then(|| Self {
+        is_commit_hash(rev).then(|| Self {
             rev: rev.to_owned(),
             dirty,
             generation,
@@ -146,9 +145,20 @@ impl Revision {
         })
     }
 
-    pub fn short(&self) -> &str {
-        &self.rev[..self.rev.len().min(7)]
+    /// Whether `rev` is a plausible commit hash. A reader must check this
+    /// before using a revision that came over the network.
+    pub fn is_valid(&self) -> bool {
+        is_commit_hash(&self.rev)
     }
+
+    pub fn short(&self) -> &str {
+        self.rev.get(..7).unwrap_or(&self.rev)
+    }
+}
+
+/// 7 to 64 hex digits: an abbreviated or full SHA-1 or SHA-256 hash.
+fn is_commit_hash(rev: &str) -> bool {
+    (7..=64).contains(&rev.len()) && rev.chars().all(|c| c.is_ascii_hexdigit())
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -178,6 +188,19 @@ mod tests {
         let dirty = Revision::parse("9b06a19abc-dirty", None, RevisionSource::HomeManager).unwrap();
         assert!(dirty.dirty);
         assert!(Revision::parse("unknown", None, RevisionSource::Nixos).is_none());
+        assert!(Revision::parse("--output=x", None, RevisionSource::Nixos).is_none());
+    }
+
+    #[test]
+    fn short_is_safe_on_any_string() {
+        let odd = Revision {
+            rev: "ééééé".into(),
+            dirty: false,
+            generation: None,
+            source: RevisionSource::Nixos,
+        };
+        assert!(!odd.is_valid());
+        assert_eq!(odd.short(), "ééééé");
     }
 
     #[test]
