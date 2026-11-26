@@ -12,7 +12,7 @@
 //! piling up in memory, and each UI turn takes a capped amount of it.
 
 use std::io::{Read, Write};
-use std::os::fd::{AsRawFd, FromRawFd, OwnedFd, RawFd};
+use std::os::fd::{AsRawFd, BorrowedFd, OwnedFd, RawFd};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::mpsc::SyncSender;
@@ -304,15 +304,33 @@ fn supervise(mut child: Box<dyn Child + Send + Sync>, shared: Arc<Shared>) {
     }
 }
 
-/// A new descriptor for the PTY master. Closing it is all its drop does:
-/// portable-pty's own writer sends a newline and EOF when dropped, which
-/// would run a half-typed command.
+/// A new descriptor for the PTY master: close-on-exec, so no other child
+/// inherits it, and non-blocking, so neither PTY thread can get stuck in a
+/// read or write after Close. Closing it is all its drop does: portable-pty's
+/// own writer sends a newline and EOF when dropped, which would run a
+/// half-typed command. The two duplicates share one open file, so they share
+/// the non-blocking flag too.
 fn dup_fd(fd: RawFd) -> Result<OwnedFd, String> {
-    let new = unsafe { libc::dup(fd) };
-    if new < 0 {
+    let owned = unsafe { BorrowedFd::borrow_raw(fd) }
+        .try_clone_to_owned()
+        .map_err(|e| e.to_string())?;
+    let flags = unsafe { libc::fcntl(owned.as_raw_fd(), libc::F_GETFL) };
+    if flags < 0
+        || unsafe { libc::fcntl(owned.as_raw_fd(), libc::F_SETFL, flags | libc::O_NONBLOCK) } < 0
+    {
         return Err(std::io::Error::last_os_error().to_string());
     }
-    Ok(unsafe { OwnedFd::from_raw_fd(new) })
+    Ok(owned)
+}
+
+/// Wait up to `POLL_MS` for `fd` to be ready for `events`.
+fn wait_for(fd: RawFd, events: libc::c_short) -> bool {
+    let mut poll = libc::pollfd {
+        fd,
+        events,
+        revents: 0,
+    };
+    unsafe { libc::poll(&mut poll, 1, POLL_MS) > 0 }
 }
 
 /// What the setup worker hands back once the shell is running. Until a
@@ -474,12 +492,26 @@ impl TerminalView {
         std::thread::spawn(move || {
             let mut file = std::fs::File::from(write);
             for bytes in keys {
-                // After Close, queued input is thrown away, not typed.
-                if writer_shared.is_closed() {
-                    return;
-                }
                 let len = bytes.len();
-                let ok = file.write_all(&bytes).is_ok();
+                let mut sent = 0;
+                // In pieces, checking for Close before each one: after Close
+                // nothing more is typed, not even the rest of a paste.
+                let ok = loop {
+                    if writer_shared.is_closed() {
+                        break false;
+                    }
+                    if sent == len {
+                        break true;
+                    }
+                    match file.write(&bytes[sent..]) {
+                        Ok(n) => sent += n,
+                        Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                            wait_for(file.as_raw_fd(), libc::POLLOUT);
+                        }
+                        Err(e) if e.kind() == std::io::ErrorKind::Interrupted => {}
+                        Err(_) => break false,
+                    }
+                };
                 writer_shared.pending.fetch_sub(len, Ordering::SeqCst);
                 if !ok {
                     return;
@@ -512,15 +544,18 @@ impl TerminalView {
                 }
                 // Wait for output, but look up regularly: a job outside the
                 // shell's group can hold the PTY open after Close.
-                let mut poll = libc::pollfd {
-                    fd: file.as_raw_fd(),
-                    events: libc::POLLIN,
-                    revents: 0,
-                };
-                if unsafe { libc::poll(&mut poll, 1, POLL_MS) } <= 0 {
+                if !wait_for(file.as_raw_fd(), libc::POLLIN) {
                     continue;
                 }
                 match file.read(&mut buf) {
+                    Err(e)
+                        if matches!(
+                            e.kind(),
+                            std::io::ErrorKind::WouldBlock | std::io::ErrorKind::Interrupted
+                        ) =>
+                    {
+                        continue;
+                    }
                     Ok(0) | Err(_) => return,
                     // Blocks while the queue is full: backpressure on the PTY.
                     Ok(n) => {
@@ -939,6 +974,28 @@ mod tests {
         }
         assert!(started.elapsed() >= CLOSE_GRACE, "it ignores SIGHUP");
         drop(pty.master);
+    }
+
+    #[test]
+    fn pty_descriptors_close_on_exec_and_never_block() {
+        let pty = native_pty_system()
+            .openpty(PtySize {
+                rows: 5,
+                cols: 40,
+                pixel_width: 0,
+                pixel_height: 0,
+            })
+            .unwrap();
+        let fd = dup_fd(pty.master.as_raw_fd().unwrap()).unwrap();
+        let fd_flags = unsafe { libc::fcntl(fd.as_raw_fd(), libc::F_GETFD) };
+        assert_ne!(fd_flags & libc::FD_CLOEXEC, 0);
+        let fl_flags = unsafe { libc::fcntl(fd.as_raw_fd(), libc::F_GETFL) };
+        assert_ne!(fl_flags & libc::O_NONBLOCK, 0);
+        // Nothing to read: a non-blocking read returns at once.
+        let mut file = std::fs::File::from(fd);
+        let mut buf = [0u8; 16];
+        let err = file.read(&mut buf).unwrap_err();
+        assert_eq!(err.kind(), std::io::ErrorKind::WouldBlock);
     }
 
     #[test]
