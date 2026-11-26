@@ -228,16 +228,15 @@ fn git_command(repo: &Path) -> Command {
         .arg("-C")
         .arg(repo)
         .env("GIT_TERMINAL_PROMPT", "0")
-        .env(
-            "GIT_SSH_COMMAND",
-            "ssh -o BatchMode=yes -o ConnectTimeout=10",
-        )
         .stdin(Stdio::null());
     command
 }
 
+/// Local git: never reaches the network, not even to fill in a partial
+/// clone's missing objects.
 fn git(repo: &Path, args: &[&str]) -> Result<String, String> {
     let output = git_command(repo)
+        .env("GIT_NO_LAZY_FETCH", "1")
         .args(args)
         .output()
         .map_err(|e| format!("git: {e}"))?;
@@ -251,10 +250,24 @@ fn git(repo: &Path, args: &[&str]) -> Result<String, String> {
 /// `git fetch` with a deadline. Best effort: offline or without
 /// credentials, the last fetch still gives a useful answer.
 fn fetch(repo: &Path, branch: &str) {
-    let Ok(mut child) = git_command(repo)
+    use std::os::unix::process::CommandExt;
+    let mut command = git_command(repo);
+    // Batch-mode SSH unless the user has their own SSH command configured.
+    let configured = std::env::var_os("GIT_SSH_COMMAND").is_some()
+        || git(repo, &["config", "--get", "core.sshCommand"]).is_ok();
+    if !configured {
+        command.env(
+            "GIT_SSH_COMMAND",
+            "ssh -o BatchMode=yes -o ConnectTimeout=10",
+        );
+    }
+    let Ok(mut child) = command
         .args(["fetch", "--quiet", "origin", "--end-of-options", branch])
         .stdout(Stdio::null())
         .stderr(Stdio::null())
+        // Its own process group, so a timeout also stops the remote helpers
+        // git starts.
+        .process_group(0)
         .spawn()
     else {
         return;
@@ -266,7 +279,9 @@ fn fetch(repo: &Path, branch: &str) {
         }
         std::thread::sleep(Duration::from_millis(100));
     }
-    let _ = child.kill();
+    let _ = Command::new("kill")
+        .args(["-KILL", "--", &format!("-{}", child.id())])
+        .status();
     let _ = child.wait();
 }
 
