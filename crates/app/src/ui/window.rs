@@ -252,20 +252,25 @@ impl FleetWindow {
             ));
 
         if self.show_more {
-            body = body.child(self.more_menu(store, name, machine, status, cx));
+            body = body.child(self.more_menu(store, name, machine, cx));
         }
         if let Some(text) = notice(store, name, machine, status) {
             body = body.child(section().child(notice_box(text)));
         }
+        // Open while it runs, and after a failure until the next sync.
         if let Some(job) = store.jobs.get(name)
-            && (self.show_log || job.running())
+            && (self.show_log || job.running() || matches!(job.result, Some(Err(_))))
         {
             body = body.child(section().child(job_log(job)));
         }
         if self.show_changes
             && let Some(commits) = store.missing(name)
         {
-            body = body.child(section().child(changes(commits)));
+            let behind = match status {
+                Status::Drift { behind, .. } => behind as usize,
+                _ => commits.len(),
+            };
+            body = body.child(section().child(changes(commits, behind)));
         }
         if machine.agent.is_some() {
             body = body.child(section().child(self.health(report, cx)));
@@ -287,7 +292,10 @@ impl FleetWindow {
     ) -> AnyElement {
         let running = store.running(name);
         let has_changes = store.missing(name).is_some_and(|c| !c.is_empty());
-        let can_sync = machine.sync.is_some() && status.is_online() && !running;
+        // Needs a way in, not a live agent: SSH still works when the agent
+        // is down, which is exactly when a sync or rollback may be needed.
+        let reachable = crate::sync::place(name, machine, &store.hostname).is_ok();
+        let can_sync = machine.sync.is_some() && reachable && !running;
         let sync_label = if running {
             store.label(name)
         } else if matches!(status, Status::Drift { .. }) {
@@ -321,7 +329,7 @@ impl FleetWindow {
                     .when(can_sync, |b| {
                         b.on_click(cx.listener(move |this, _, _, cx| {
                             this.show_log = true;
-                            crate::start_job(
+                            let _ = crate::start_job(
                                 this.store.clone(),
                                 target.clone(),
                                 crate::sync::Action::Sync,
@@ -347,15 +355,14 @@ impl FleetWindow {
         store: &Store,
         name: &str,
         machine: &Machine,
-        status: Status,
         cx: &Context<Self>,
     ) -> impl IntoElement {
         let custom = machine
             .sync
             .as_ref()
             .is_some_and(|s| s.preset == menagerie_fleet::SyncPreset::Custom);
-        let can_roll_back =
-            machine.sync.is_some() && !custom && status.is_online() && !store.running(name);
+        let reachable = crate::sync::place(name, machine, &store.hostname).is_ok();
+        let can_roll_back = machine.sync.is_some() && !custom && reachable && !store.running(name);
         let target = name.to_owned();
         div()
             .mt(px(10.))
@@ -378,7 +385,7 @@ impl FleetWindow {
                     b.on_click(cx.listener(move |this, _, _, cx| {
                         this.show_more = false;
                         this.show_log = true;
-                        crate::start_job(
+                        let _ = crate::start_job(
                             this.store.clone(),
                             target.clone(),
                             crate::sync::Action::Rollback,
@@ -1039,7 +1046,7 @@ fn job_log(job: &crate::store::Job) -> impl IntoElement {
 }
 
 /// The commits the machine is missing, newest first.
-fn changes(commits: &[(String, String)]) -> impl IntoElement {
+fn changes(commits: &[(String, String)], behind: usize) -> impl IntoElement {
     div()
         .flex()
         .flex_col()
@@ -1048,8 +1055,17 @@ fn changes(commits: &[(String, String)]) -> impl IntoElement {
                 .text_size(px(14.))
                 .font_weight(FontWeight::BOLD)
                 .mb(px(10.))
-                .child(format!("Changes · {} to pull", commits.len())),
+                .child(format!("Changes · {behind} to pull")),
         )
+        .when(commits.len() < behind, |el| {
+            el.child(
+                div()
+                    .mb(px(6.))
+                    .text_size(px(11.5))
+                    .text_color(theme::mute())
+                    .child(format!("Showing the latest {}.", commits.len())),
+            )
+        })
         .children(commits.iter().map(|(hash, subject)| {
             div()
                 .flex()

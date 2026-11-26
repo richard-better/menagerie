@@ -149,6 +149,7 @@ impl Popover {
                 running,
                 machine.sync.is_some(),
                 self.store.clone(),
+                self.hooks.open_window.clone(),
             )))
     }
 }
@@ -163,6 +164,7 @@ fn trailing(
     running: bool,
     can_sync: bool,
     store: Entity<Store>,
+    open_window: OpenWindow,
 ) -> impl IntoElement {
     if status.needs_sync() && can_sync && !running {
         let target = name.to_owned();
@@ -185,7 +187,13 @@ fn trailing(
             .on_click(move |_, _, cx| {
                 // The row behind it opens the window; this only syncs.
                 cx.stop_propagation();
-                crate::start_job(store.clone(), target.clone(), crate::sync::Action::Sync, cx);
+                // When it can't start, show why: the window opens on the
+                // machine with its log.
+                if crate::start_job(store.clone(), target.clone(), crate::sync::Action::Sync, cx)
+                    .is_err()
+                {
+                    open_window(Some(target.clone()), cx);
+                }
             })
             .child(label)
             .child(
