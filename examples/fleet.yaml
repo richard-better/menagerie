@@ -1,0 +1,33 @@
+# An example fleet file. Copy it to ~/.config/menagerie/fleet.yaml and edit.
+version: 1
+machines:
+  richard-m4-max:
+    role: Workstation
+    device: laptop
+    agent: http://richard-m4-max:9184
+    sync: { preset: nix-darwin, repo: ~/dev/gh/richard-better/mac }
+
+  richard-hp-server:
+    role: Media server, exit node
+    device: laptop
+    agent: http://richard-hp-server:9184
+    ssh: richard@richard-hp-server
+    sync: { preset: home-manager, repo: ~/dev/gh/richard-better/mac }
+    services:
+      - name: Jellyfin
+        icon: jellyfin
+        url: http://richard-hp-server:8096
+        health: http://richard-hp-server:8096/health
+      - name: Jellyseerr
+        icon: jellyseerr
+        url: http://richard-hp-server:5055
+
+  homeassistant:
+    role: Smart home
+    device: box
+    services:
+      - { name: Home Assistant, icon: home-assistant, url: http://homeassistant:8123 }
+
+  iphone-15-pro-max:
+    role: Phone
+    device: phone
