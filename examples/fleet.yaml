@@ -1,5 +1,9 @@
 # An example fleet file. Copy it to ~/.config/menagerie/fleet.yaml and edit.
 version: 1
+# Your local checkout of the configuration repo; machines are compared with
+# its `origin/<branch>` to show how far ahead or behind they are.
+repo: ~/dev/gh/richard-better/mac
+branch: main
 machines:
   richard-m4-max:
     role: Workstation
