@@ -3654,6 +3654,7 @@ dependencies = [
  "raw-window-handle",
  "serde_json",
  "serde_yaml_ng",
+ "tempfile",
  "tray-icon",
  "ureq",
 ]

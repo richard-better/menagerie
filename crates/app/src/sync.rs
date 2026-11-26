@@ -14,13 +14,10 @@
 use std::io::{BufRead, BufReader};
 use std::path::Path;
 use std::process::{Command, Stdio};
-use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::mpsc::Sender;
+use std::sync::{Arc, Mutex};
 
 use menagerie_fleet::{Fleet, Machine, SyncPreset};
-
-use crate::store::Checkout;
 
 /// Set on the app's own executable when sudo runs it as the askpass helper.
 pub const ASKPASS_ENV: &str = "MENAGERIE_ASKPASS";
@@ -74,14 +71,27 @@ pub enum Place {
 /// Whether `machine` is the one the app runs on: its agent is on this
 /// machine's loopback, or its name is this machine's hostname.
 pub fn is_here(name: &str, machine: &Machine, hostname: &str) -> bool {
-    let loopback = machine.agent.as_deref().is_some_and(|url| {
-        let authority = url.split("://").nth(1).unwrap_or(url);
-        let authority = authority.split('/').next().unwrap_or("");
-        ["localhost", "127.", "[::1]"]
-            .iter()
-            .any(|prefix| authority.starts_with(prefix))
-    });
+    let loopback = machine
+        .agent
+        .as_deref()
+        .and_then(url_host)
+        .is_some_and(|host| {
+            host.eq_ignore_ascii_case("localhost")
+                || host
+                    .parse::<std::net::IpAddr>()
+                    .is_ok_and(|ip| ip.is_loopback())
+        });
     loopback || name.eq_ignore_ascii_case(hostname)
+}
+
+/// The host of a URL such as `http://user@[::1]:9184/x`, without brackets.
+fn url_host(url: &str) -> Option<&str> {
+    let authority = url.split_once("://")?.1.split(['/', '?', '#']).next()?;
+    let host_port = authority.rsplit_once('@').map_or(authority, |(_, h)| h);
+    match host_port.strip_prefix('[') {
+        Some(rest) => rest.split_once(']').map(|(host, _)| host),
+        None => host_port.split(':').next(),
+    }
 }
 
 /// This machine's short hostname.
@@ -95,13 +105,7 @@ pub fn hostname() -> String {
 }
 
 /// The commands that sync (or roll back) `name`.
-pub fn plan(
-    action: Action,
-    fleet: &Fleet,
-    name: &str,
-    place: &Place,
-    checkout: Option<&Checkout>,
-) -> Result<Vec<Step>, String> {
+pub fn plan(action: Action, fleet: &Fleet, name: &str, place: &Place) -> Result<Vec<Step>, String> {
     let machine = fleet
         .machines
         .get(name)
@@ -113,29 +117,27 @@ pub fn plan(
     let mut steps = Vec::new();
 
     // Sync is two-way: commits made in your checkout go up first, so the
-    // machine can pull them.
+    // machine can pull them. Checked when the sync runs, not from the last
+    // poll, so nothing committed or edited since is missed.
     if action == Action::Sync
-        && let (Some(repo), Some(checkout)) = (fleet.repo_path(), checkout)
+        && let Some(repo) = fleet.repo_path()
     {
-        if checkout.dirty {
-            return Err(
-                "Your checkout has uncommitted changes. Commit or stash them first.".to_owned(),
-            );
-        }
-        if checkout.unpushed > 0 {
-            let repo = repo.to_string_lossy();
-            steps.push(Step::new(
-                format!("Push {} commit(s) from your checkout", checkout.unpushed),
-                "git",
-                &[
-                    "-C",
-                    &repo,
-                    "push",
-                    "origin",
-                    &format!("HEAD:{}", fleet.branch()),
-                ],
-            ));
-        }
+        let upstream = sh_quote(&format!("origin/{}", fleet.branch()));
+        let refspec = sh_quote(&format!("HEAD:{}", fleet.branch()));
+        let script = format!(
+            "cd {} || exit 1\n\
+             if [ -n \"$(git status --porcelain)\" ]; then\n\
+             \x20 echo 'Your checkout has uncommitted changes. Commit or stash them first.' >&2; exit 1\n\
+             fi\n\
+             ahead=$(git rev-list --count {upstream}..HEAD) || exit 1\n\
+             if [ \"$ahead\" -gt 0 ]; then git push origin {refspec}; else echo 'Nothing to push.'; fi",
+            sh_quote(&repo.to_string_lossy()),
+        );
+        steps.push(Step::new(
+            "Check your checkout and push its commits",
+            "/bin/sh",
+            &["-c", &script],
+        ));
     }
 
     let repo = sync.repo.clone().unwrap_or_else(|| ".".to_owned());
@@ -161,15 +163,15 @@ pub fn plan(
         (Action::Sync, SyncPreset::HomeManager) => {
             format!("home-manager switch --flake {}", sh_quote(&target))
         }
-        (Action::Sync, SyncPreset::Custom) => sync.command.clone().unwrap_or_default(),
+        // In a subshell, so none of it runs if the pull fails.
+        (Action::Sync, SyncPreset::Custom) => {
+            format!("(\n{}\n)", sync.command.clone().unwrap_or_default())
+        }
         (Action::Rollback, SyncPreset::NixDarwin) => format!("{sudo} darwin-rebuild --rollback"),
         (Action::Rollback, SyncPreset::Nixos) => {
             format!("{sudo} nixos-rebuild switch --rollback")
         }
-        (Action::Rollback, SyncPreset::HomeManager) => {
-            // The generation before the current one, activated directly.
-            "\"$(home-manager generations | sed -n 2p | awk '{print $NF}')/activate\"".to_owned()
-        }
+        (Action::Rollback, SyncPreset::HomeManager) => "home-manager switch --rollback".to_owned(),
         (Action::Rollback, SyncPreset::Custom) => {
             return Err(format!(
                 "{name} syncs with a custom command, so Menagerie doesn't know how to roll it back"
@@ -193,6 +195,9 @@ pub fn plan(
             label,
             "ssh",
             &[
+                // A terminal on the far side, so cancelling (which hangs up
+                // the connection) also stops the remote commands.
+                "-tt",
                 "-o",
                 "BatchMode=yes",
                 "-o",
@@ -244,39 +249,40 @@ pub enum Event {
 }
 
 /// Stops a running plan: the current step's whole process group is killed
-/// and no further step starts.
+/// and no further step starts. Starting a step and cancelling take the same
+/// lock, so a cancel can't slip in between the check and the spawn.
 #[derive(Debug, Clone, Default)]
-pub struct Cancel {
-    cancelled: Arc<AtomicBool>,
+pub struct Cancel(Arc<Mutex<CancelState>>);
+
+#[derive(Debug, Default)]
+struct CancelState {
+    cancelled: bool,
     /// The running step's process group, or 0 between steps.
-    group: Arc<AtomicU32>,
+    group: u32,
 }
 
 impl Cancel {
     pub fn cancel(&self) {
-        self.cancelled.store(true, Ordering::SeqCst);
-        let group = self.group.load(Ordering::SeqCst);
-        if group != 0 {
+        let mut state = self.0.lock().unwrap_or_else(|e| e.into_inner());
+        state.cancelled = true;
+        if state.group != 0 {
             let _ = Command::new("kill")
-                .args(["-TERM", "--", &format!("-{group}")])
+                .args(["-TERM", "--", &format!("-{}", state.group)])
                 .status();
         }
     }
 
     pub fn is_cancelled(&self) -> bool {
-        self.cancelled.load(Ordering::SeqCst)
+        self.0.lock().unwrap_or_else(|e| e.into_inner()).cancelled
     }
 }
 
 /// Run `steps` in order, sending every output line and then the result.
 /// Blocks; call it off the main thread.
 pub fn run(steps: Vec<Step>, events: Sender<Event>, cancel: Cancel) {
-    let result = steps.iter().try_for_each(|step| {
-        if cancel.is_cancelled() {
-            return Err("Cancelled".to_owned());
-        }
-        run_step(step, &events, &cancel)
-    });
+    let result = steps
+        .iter()
+        .try_for_each(|step| run_step(step, &events, &cancel));
     let result = match result {
         Err(_) if cancel.is_cancelled() => Err("Cancelled".to_owned()),
         other => other,
@@ -299,12 +305,19 @@ fn run_step(step: &Step, events: &Sender<Event>, cancel: &Cancel) -> Result<(), 
     {
         command.env("SUDO_ASKPASS", exe).env(ASKPASS_ENV, "1");
     }
-    let mut child = command
-        // Its own process group, so Cancel stops everything it started.
-        .process_group(0)
-        .spawn()
-        .map_err(|e| format!("{}: could not start {}: {e}", step.label, step.program))?;
-    cancel.group.store(child.id(), Ordering::SeqCst);
+    let mut child = {
+        let mut state = cancel.0.lock().unwrap_or_else(|e| e.into_inner());
+        if state.cancelled {
+            return Err("Cancelled".to_owned());
+        }
+        let child = command
+            // Its own process group, so Cancel stops everything it started.
+            .process_group(0)
+            .spawn()
+            .map_err(|e| format!("{}: could not start {}: {e}", step.label, step.program))?;
+        state.group = child.id();
+        child
+    };
     let stdout = child.stdout.take();
     let stderr = child.stderr.take();
     std::thread::scope(|scope| {
@@ -316,7 +329,7 @@ fn run_step(step: &Step, events: &Sender<Event>, cancel: &Cancel) -> Result<(), 
         }
     });
     let status = child.wait().map_err(|e| format!("{}: {e}", step.label));
-    cancel.group.store(0, Ordering::SeqCst);
+    cancel.0.lock().unwrap_or_else(|e| e.into_inner()).group = 0;
     let status = status?;
     if status.success() {
         Ok(())
@@ -392,6 +405,21 @@ mod cancel_tests {
         assert!(!rest.contains(&Event::Line("late".into())));
         assert!(!rest.contains(&Event::Line("▸ next".into())));
     }
+
+    #[test]
+    fn a_cancel_before_a_step_starts_stops_it() {
+        let (tx, rx) = std::sync::mpsc::channel();
+        let cancel = Cancel::default();
+        cancel.cancel();
+        run(
+            vec![Step::new("never", "/bin/sh", &["-c", "echo ran"])],
+            tx,
+            cancel,
+        );
+        let events: Vec<Event> = rx.iter().collect();
+        assert!(!events.contains(&Event::Line("ran".into())));
+        assert_eq!(events.last(), Some(&Event::Done(Err("Cancelled".into()))));
+    }
 }
 
 /// Act as sudo's askpass helper: ask for the password in a native dialog
@@ -461,8 +489,17 @@ mod tests {
         Fleet::from_yaml(include_str!("../../../examples/fleet.yaml")).unwrap()
     }
 
-    fn clean() -> Checkout {
-        Checkout::default()
+    fn collect(steps: Vec<Step>) -> (Vec<String>, Result<(), String>) {
+        let (tx, rx) = std::sync::mpsc::channel();
+        run(steps, tx, Cancel::default());
+        let mut lines = Vec::new();
+        for event in rx {
+            match event {
+                Event::Line(line) => lines.push(line),
+                Event::Done(result) => return (lines, result),
+            }
+        }
+        unreachable!("run always ends with Done")
     }
 
     #[test]
@@ -483,20 +520,23 @@ mod tests {
             &f.machines["richard-hp-server"],
             "richard-hp-server"
         ));
+        assert_eq!(url_host("http://[::1]:9184/x"), Some("::1"));
+        assert_eq!(url_host("http://me@127.0.0.1:9184"), Some("127.0.0.1"));
+        assert_eq!(
+            url_host("http://localhost.example.com:9184"),
+            Some("localhost.example.com")
+        );
+        let mut m = f.machines["richard-hp-server"].clone();
+        m.agent = Some("http://localhost.example.com:9184".into());
+        assert!(!is_here("richard-hp-server", &m, "other"));
     }
 
     #[test]
     fn syncs_this_mac_with_darwin_rebuild_and_askpass() {
-        let steps = plan(
-            Action::Sync,
-            &fleet(),
-            "richard-m4-max",
-            &Place::Here,
-            Some(&clean()),
-        )
-        .unwrap();
-        assert_eq!(steps.len(), 1);
-        let step = &steps[0];
+        let steps = plan(Action::Sync, &fleet(), "richard-m4-max", &Place::Here).unwrap();
+        assert_eq!(steps.len(), 2, "the checkout step, then the switch");
+        assert_eq!(steps[0].label, "Check your checkout and push its commits");
+        let step = &steps[1];
         assert_eq!(step.program, "/bin/sh");
         assert_eq!(
             step.args[1],
@@ -506,113 +546,146 @@ mod tests {
     }
 
     #[test]
-    fn syncs_a_home_manager_machine_over_ssh() {
+    fn syncs_a_home_manager_machine_over_ssh_with_a_terminal() {
         let place = Place::Ssh("richard@richard-hp-server".into());
-        let steps = plan(
-            Action::Sync,
-            &fleet(),
-            "richard-hp-server",
-            &place,
-            Some(&clean()),
-        )
-        .unwrap();
-        let step = &steps[0];
+        let steps = plan(Action::Sync, &fleet(), "richard-hp-server", &place).unwrap();
+        let step = &steps[1];
         assert_eq!(step.program, "ssh");
-        assert_eq!(step.args[5], "richard@richard-hp-server");
-        assert_eq!(
-            step.args[6],
-            r#"sh -lc 'cd ~/'\''dev/gh/richard-better/mac'\'' && git pull --ff-only && home-manager switch --flake '\''.#richard@richard-hp-server'\'''"#
+        assert_eq!(step.args[0], "-tt");
+        assert_eq!(step.args[6], "richard@richard-hp-server");
+        let expected = concat!(
+            "sh -lc 'cd ~/'\\''dev/gh/richard-better/mac'\\'' && git pull --ff-only",
+            " && home-manager switch --flake '\\''.#richard@richard-hp-server'\\'''"
         );
+        assert_eq!(step.args[7], expected);
         assert!(!step.askpass);
+        let rollback = plan(Action::Rollback, &fleet(), "richard-hp-server", &place).unwrap();
+        assert_eq!(rollback.len(), 1, "rolling back doesn't touch the checkout");
+        assert!(rollback[0].args[7].contains("home-manager switch --rollback"));
     }
 
     #[test]
-    fn pushes_unpushed_commits_first_and_refuses_a_dirty_checkout() {
-        let checkout = Checkout {
-            unpushed: 2,
-            ..Checkout::default()
-        };
-        let steps = plan(
-            Action::Sync,
-            &fleet(),
-            "richard-m4-max",
-            &Place::Here,
-            Some(&checkout),
-        )
-        .unwrap();
-        assert_eq!(steps.len(), 2);
-        assert_eq!(steps[0].program, "git");
-        assert_eq!(steps[0].args.last().unwrap(), "HEAD:main");
-
-        let dirty = Checkout {
-            dirty: true,
-            ..Checkout::default()
-        };
-        assert!(
-            plan(
-                Action::Sync,
-                &fleet(),
-                "richard-m4-max",
-                &Place::Here,
-                Some(&dirty)
-            )
-            .is_err()
-        );
-        // Rolling back doesn't touch the checkout.
-        assert!(
-            plan(
-                Action::Rollback,
-                &fleet(),
-                "richard-m4-max",
-                &Place::Here,
-                Some(&dirty)
-            )
-            .is_ok()
-        );
+    fn a_custom_command_runs_only_after_a_successful_pull() {
+        let mut f = fleet();
+        let machine = f.machines.get_mut("richard-m4-max").unwrap();
+        machine.sync = Some(menagerie_fleet::Sync {
+            preset: SyncPreset::Custom,
+            repo: Some("/nonexistent".into()),
+            command: Some("echo one; echo two".into()),
+            flake: None,
+        });
+        f.repo = None;
+        let steps = plan(Action::Sync, &f, "richard-m4-max", &Place::Here).unwrap();
+        let (lines, result) = collect(steps);
+        assert!(result.is_err());
+        assert!(!lines.iter().any(|l| l == "two"), "{lines:?}");
     }
 
     #[test]
     fn machines_without_sync_or_a_way_in_are_refused() {
         let f = fleet();
-        assert!(plan(Action::Sync, &f, "homeassistant", &Place::Here, None).is_err());
+        assert!(plan(Action::Sync, &f, "homeassistant", &Place::Here).is_err());
         assert!(place("homeassistant", &f.machines["homeassistant"], "other").is_err());
     }
 
     #[test]
     fn quoting_survives_quotes() {
-        assert_eq!(sh_quote("it's"), r"'it'\''s'");
+        assert_eq!(sh_quote("it's"), "'it'\\''s'");
         assert_eq!(sh_path("/srv/a b"), "'/srv/a b'");
+    }
+
+    fn git(dir: &Path, args: &[&str]) {
+        let status = Command::new("git")
+            .arg("-C")
+            .arg(dir)
+            .args(args)
+            .env("GIT_AUTHOR_NAME", "t")
+            .env("GIT_AUTHOR_EMAIL", "t@example.com")
+            .env("GIT_COMMITTER_NAME", "t")
+            .env("GIT_COMMITTER_EMAIL", "t@example.com")
+            .status()
+            .unwrap();
+        assert!(status.success(), "git {args:?}");
+    }
+
+    #[test]
+    fn the_checkout_step_refuses_dirty_trees_and_pushes_new_commits() {
+        let dir = tempfile::tempdir().unwrap();
+        let origin = dir.path().join("origin.git");
+        let work = dir.path().join("work");
+        git(
+            dir.path(),
+            &[
+                "init",
+                "-q",
+                "--bare",
+                "-b",
+                "main",
+                origin.to_str().unwrap(),
+            ],
+        );
+        git(
+            dir.path(),
+            &[
+                "clone",
+                "-q",
+                origin.to_str().unwrap(),
+                work.to_str().unwrap(),
+            ],
+        );
+        git(&work, &["config", "commit.gpgsign", "false"]);
+        git(&work, &["commit", "-q", "--allow-empty", "-m", "one"]);
+        git(&work, &["push", "-q", "origin", "HEAD:main"]);
+        git(&work, &["fetch", "-q"]);
+
+        let mut f = fleet();
+        f.repo = Some(work.to_string_lossy().into_owned());
+        let check = |f: &Fleet| {
+            let mut steps = plan(Action::Sync, f, "richard-m4-max", &Place::Here).unwrap();
+            steps.truncate(1);
+            collect(steps)
+        };
+
+        let (lines, result) = check(&f);
+        assert_eq!(result, Ok(()), "{lines:?}");
+        assert!(lines.iter().any(|l| l == "Nothing to push."), "{lines:?}");
+
+        std::fs::write(work.join("new.txt"), "untracked").unwrap();
+        let (lines, result) = check(&f);
+        assert!(result.is_err());
+        assert!(
+            lines.iter().any(|l| l.contains("uncommitted changes")),
+            "{lines:?}"
+        );
+        std::fs::remove_file(work.join("new.txt")).unwrap();
+
+        git(&work, &["commit", "-q", "--allow-empty", "-m", "two"]);
+        let (lines, result) = check(&f);
+        assert_eq!(result, Ok(()), "{lines:?}");
+        let pushed = Command::new("git")
+            .arg("-C")
+            .arg(&origin)
+            .args(["log", "--format=%s", "-1", "main"])
+            .output()
+            .unwrap();
+        assert_eq!(String::from_utf8_lossy(&pushed.stdout).trim(), "two");
     }
 
     #[test]
     fn runs_steps_in_order_and_stops_at_a_failure() {
-        let (tx, rx) = std::sync::mpsc::channel();
-        run(
-            vec![
-                Step::new("first", "/bin/sh", &["-c", "echo one; echo two >&2"]),
-                Step::new(
-                    "second",
-                    "/bin/sh",
-                    &["-c", "printf '\\033[1mbold\\033[0m\\n'; exit 3"],
-                ),
-                Step::new("never", "/bin/sh", &["-c", "echo nope"]),
-            ],
-            tx,
-            Cancel::default(),
-        );
-        let events: Vec<Event> = rx.iter().collect();
-        let lines: Vec<&str> = events
-            .iter()
-            .filter_map(|e| match e {
-                Event::Line(l) => Some(l.as_str()),
-                Event::Done(_) => None,
-            })
-            .collect();
-        assert!(lines.contains(&"one") && lines.contains(&"two") && lines.contains(&"bold"));
-        assert!(!lines.contains(&"nope"));
-        match events.last().unwrap() {
-            Event::Done(Err(why)) => assert!(why.starts_with("second failed"), "{why}"),
-            other => panic!("expected a failure, got {other:?}"),
-        }
+        let (lines, result) = collect(vec![
+            Step::new("first", "/bin/sh", &["-c", "echo one; echo two >&2"]),
+            Step::new(
+                "second",
+                "/bin/sh",
+                &["-c", "printf '\\033[1mbold\\033[0m\\n'; exit 3"],
+            ),
+            Step::new("never", "/bin/sh", &["-c", "echo nope"]),
+        ]);
+        assert!(lines.iter().any(|l| l == "one") && lines.iter().any(|l| l == "two"));
+        assert!(lines.iter().any(|l| l == "bold"));
+        assert!(!lines.iter().any(|l| l == "nope"));
+        let why = result.unwrap_err();
+        assert!(why.starts_with("second failed"), "{why}");
     }
 }

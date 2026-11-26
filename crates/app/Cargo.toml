@@ -61,3 +61,4 @@ serde_json = "1.0.154"
 
 [dev-dependencies]
 serde_yaml_ng = "0.10.0"
+tempfile = "3.27.0"
