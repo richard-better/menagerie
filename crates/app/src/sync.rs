@@ -126,7 +126,8 @@ pub fn plan(action: Action, fleet: &Fleet, name: &str, place: &Place) -> Result<
         let refspec = sh_quote(&format!("HEAD:{}", fleet.branch()));
         let script = format!(
             "cd {} || exit 1\n\
-             if [ -n \"$(git status --porcelain)\" ]; then\n\
+             changes=$(git status --porcelain --untracked-files=all --ignore-submodules=none) || exit 1\n\
+             if [ -n \"$changes\" ]; then\n\
              \x20 echo 'Your checkout has uncommitted changes. Commit or stash them first.' >&2; exit 1\n\
              fi\n\
              ahead=$(git rev-list --count {upstream}..HEAD) || exit 1\n\
@@ -248,6 +249,15 @@ pub enum Event {
     Done(Result<(), String>),
 }
 
+/// How long a cancelled step gets to exit before it is killed.
+const CANCEL_GRACE: std::time::Duration = std::time::Duration::from_secs(3);
+
+fn signal_group(signal: &str, group: u32) {
+    let _ = Command::new("kill")
+        .args([signal, "--", &format!("-{group}")])
+        .status();
+}
+
 /// Stops a running plan: the current step's whole process group is killed
 /// and no further step starts. Starting a step and cancelling take the same
 /// lock, so a cancel can't slip in between the check and the spawn.
@@ -262,14 +272,26 @@ struct CancelState {
 }
 
 impl Cancel {
+    /// Ask the running step to stop, and kill it if it hasn't after a
+    /// grace period. The job stays running until the step has exited.
     pub fn cancel(&self) {
-        let mut state = self.0.lock().unwrap_or_else(|e| e.into_inner());
-        state.cancelled = true;
-        if state.group != 0 {
-            let _ = Command::new("kill")
-                .args(["-TERM", "--", &format!("-{}", state.group)])
-                .status();
+        let group = {
+            let mut state = self.0.lock().unwrap_or_else(|e| e.into_inner());
+            state.cancelled = true;
+            state.group
+        };
+        if group == 0 {
+            return;
         }
+        signal_group("-TERM", group);
+        let state = self.0.clone();
+        std::thread::spawn(move || {
+            std::thread::sleep(CANCEL_GRACE);
+            // Still the same step: it ignored SIGTERM.
+            if state.lock().unwrap_or_else(|e| e.into_inner()).group == group {
+                signal_group("-KILL", group);
+            }
+        });
     }
 
     pub fn is_cancelled(&self) -> bool {
@@ -404,6 +426,36 @@ mod cancel_tests {
         assert_eq!(rest.last(), Some(&Event::Done(Err("Cancelled".into()))));
         assert!(!rest.contains(&Event::Line("late".into())));
         assert!(!rest.contains(&Event::Line("▸ next".into())));
+    }
+
+    #[test]
+    fn cancel_kills_a_step_that_ignores_sigterm() {
+        let (tx, rx) = std::sync::mpsc::channel();
+        let cancel = Cancel::default();
+        let handle = {
+            let cancel = cancel.clone();
+            std::thread::spawn(move || {
+                run(
+                    vec![Step::new(
+                        "stubborn",
+                        "/bin/sh",
+                        &["-c", "trap '' TERM; echo ready; sleep 30; echo late"],
+                    )],
+                    tx,
+                    cancel,
+                )
+            })
+        };
+        assert_eq!(rx.recv().unwrap(), Event::Line("▸ stubborn".into()));
+        assert_eq!(rx.recv().unwrap(), Event::Line("ready".into()));
+        let started = std::time::Instant::now();
+        cancel.cancel();
+        let rest: Vec<Event> = rx.iter().collect();
+        handle.join().unwrap();
+        let took = started.elapsed();
+        assert!(took >= CANCEL_GRACE && took < CANCEL_GRACE * 3, "{took:?}");
+        assert_eq!(rest.last(), Some(&Event::Done(Err("Cancelled".into()))));
+        assert!(!rest.contains(&Event::Line("late".into())));
     }
 
     #[test]
@@ -638,6 +690,8 @@ mod tests {
         git(&work, &["push", "-q", "origin", "HEAD:main"]);
         git(&work, &["fetch", "-q"]);
 
+        // Even with untracked files hidden by the user's config.
+        git(&work, &["config", "status.showUntrackedFiles", "no"]);
         let mut f = fleet();
         f.repo = Some(work.to_string_lossy().into_owned());
         let check = |f: &Fleet| {
