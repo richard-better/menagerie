@@ -207,17 +207,17 @@ impl Prober {
         let mut last_tick = SystemTime::now();
         loop {
             let now = SystemTime::now();
-            let gap = now.duration_since(last_tick).unwrap_or_default();
-            if gap > TICK + SLEEP_GAP {
+            // A long gap means the machine slept; time going backwards means
+            // the clock was set back and every deadline is now too far
+            // away. Either way, run everything now.
+            let slept = now
+                .duration_since(last_tick)
+                .is_ok_and(|gap| gap > TICK + SLEEP_GAP);
+            if slept || now < last_tick {
                 next.iter_mut().for_each(|t| *t = now);
             }
             last_tick = now;
             for (i, (kind, every)) in SCHEDULE.into_iter().enumerate() {
-                // A clock set backwards would otherwise postpone the probe
-                // until wall time caught up again.
-                if next[i] > now + every {
-                    next[i] = now;
-                }
                 if now >= next[i] {
                     self.run(kind, every);
                     next[i] = now + every;
