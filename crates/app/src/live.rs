@@ -214,6 +214,9 @@ fn fetch_status(http: &ureq::Agent, base: &str) -> Result<protocol::Status, Stri
 fn check_health(http: &ureq::Agent, url: &str) -> Health {
     let started = Instant::now();
     match http.get(url).call() {
+        Ok(response) if !response.status().is_success() => {
+            Health::Down(format!("HTTP {}", response.status()))
+        }
         Ok(_) => Health::Up {
             millis: started.elapsed().as_millis().min(u32::MAX as u128) as u32,
         },
@@ -254,6 +257,7 @@ fn fetch(repo: &Path, branch: &str) {
     let mut command = git_command(repo);
     // Batch-mode SSH unless the user has their own SSH command configured.
     let configured = std::env::var_os("GIT_SSH_COMMAND").is_some()
+        || std::env::var_os("GIT_SSH").is_some()
         || git(repo, &["config", "--get", "core.sshCommand"]).is_ok();
     if !configured {
         command.env(
