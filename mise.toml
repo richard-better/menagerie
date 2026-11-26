@@ -1,0 +1,3 @@
+# libghostty-vt (the terminal) builds Ghostty with Zig.
+[tools]
+zig = "0.17.1"

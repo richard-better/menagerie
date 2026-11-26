@@ -12,7 +12,7 @@ Menagerie reads `~/.config/menagerie/fleet.yaml` (or `$MENAGERIE_FLEET`). [examp
 
 ## Building
 
-Needs Rust and macOS. gpui's shaders are compiled at runtime, so the Command Line Tools are enough; the full Xcode is not required.
+Needs Rust, macOS, and Zig 0.17 for the terminal (Ghostty's libghostty-vt is built from source): `mise install` provides it from `mise.toml`. gpui's shaders are compiled at runtime, so the Command Line Tools are enough; the full Xcode is not required.
 
 ```sh
 cargo run -p menagerie          # the menu bar app; right-click ◆ to quit
