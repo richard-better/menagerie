@@ -122,12 +122,12 @@ pub fn plan(action: Action, fleet: &Fleet, name: &str, place: &Place) -> Result<
     if action == Action::Sync
         && let Some(repo) = fleet.repo_path()
     {
-        let branch = sh_quote(fleet.branch());
+        let head = sh_quote(&format!("refs/heads/{}", fleet.branch()));
         let upstream = sh_quote(&format!("origin/{}", fleet.branch()));
         let refspec = sh_quote(&format!("HEAD:refs/heads/{}", fleet.branch()));
         let script = format!(
             "cd {} || exit 1\n\
-             if [ \"$(git symbolic-ref --quiet --short HEAD)\" != {branch} ]; then\n\
+             if [ \"$(git symbolic-ref --quiet HEAD)\" != {head} ]; then\n\
              \x20 echo \"Your checkout isn't on the configured branch. Switch to it first.\" >&2; exit 1\n\
              fi\n\
              changes=$(git status --porcelain --untracked-files=all --ignore-submodules=none) || exit 1\n\
@@ -188,9 +188,10 @@ pub fn plan(action: Action, fleet: &Fleet, name: &str, place: &Place) -> Result<
         // would quietly update some other branch.
         Action::Sync => {
             let branch = sh_quote(fleet.branch());
+            let head = sh_quote(&format!("refs/heads/{}", fleet.branch()));
             format!(
                 "cd {} || exit 1\n\
-                 if [ \"$(git symbolic-ref --quiet --short HEAD)\" != {branch} ]; then\n\
+                 if [ \"$(git symbolic-ref --quiet HEAD)\" != {head} ]; then\n\
                  \x20 echo \"The checkout on this machine isn't on the configured branch.\" >&2; exit 1\n\
                  fi\n\
                  git pull --ff-only origin {branch} || exit 1\n\
@@ -650,7 +651,7 @@ mod tests {
             script.starts_with("cd ~/'dev/gh/richard-better/mac' || exit 1\n"),
             "{script}"
         );
-        assert!(script.contains("!= 'main' ]"), "{script}");
+        assert!(script.contains("!= 'refs/heads/main' ]"), "{script}");
         assert!(
             script.contains("git pull --ff-only origin 'main' || exit 1\n"),
             "{script}"
@@ -765,6 +766,18 @@ mod tests {
         assert!(result.is_err());
         assert!(lines.iter().any(|l| l.contains("isn't on")), "{lines:?}");
         git(&work, &["switch", "-q", "main"]);
+
+        // A tag named like the branch makes git abbreviate HEAD to
+        // `heads/main`; a branch configured as `heads/main` must not match.
+        git(&work, &["tag", "main"]);
+        let mut tricky = fleet();
+        tricky.repo = Some(work.to_string_lossy().into_owned());
+        tricky.branch = Some("heads/main".into());
+        let mut steps = plan(Action::Sync, &tricky, "richard-m4-max", &Place::Here).unwrap();
+        steps.truncate(1);
+        let (lines, result) = collect(steps);
+        assert!(result.is_err(), "{lines:?}");
+        git(&work, &["tag", "-d", "main"]);
 
         // Even with untracked files hidden by the user's config.
         git(&work, &["config", "status.showUntrackedFiles", "no"]);
