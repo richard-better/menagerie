@@ -167,7 +167,11 @@ pub fn service_link(id: impl Into<ElementId>, service: &Service, side: f32) -> S
     service_icon(service, side)
         .id(id)
         .cursor_pointer()
-        .on_click(move |_, _, cx| cx.open_url(&url))
+        .on_click(move |_, _, cx| {
+            // Inside a popover row, which opens the window when clicked.
+            cx.stop_propagation();
+            cx.open_url(&url);
+        })
 }
 
 /// A small square button with an icon in it.
