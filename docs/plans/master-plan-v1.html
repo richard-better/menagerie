@@ -116,7 +116,7 @@
   .ticks { display: flex; justify-content: space-between; font-family: var(--mono); font-size: 10.5px; color: var(--a-mute); margin-top: 6px; }
   .svc2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 10px; }
   .btn.pri { background: #2563eb; border-color: #2563eb; }
-  .pop-hd2 { padding: 2px 6px 12px; }
+  .pop-hd2 { padding: 2px 6px 12px; display: flex; justify-content: space-between; align-items: flex-start; }
   .attn { font-size: 18px; font-weight: 650; color: var(--a-yellow); }
   .cen { font-size: 11.5px; color: var(--a-mute); margin-top: 2px; }
   .row-m2 { display: grid; grid-template-columns: 30px 1fr auto; gap: 4px 10px; align-items: center; padding: 9px 8px; border-radius: 9px; }
@@ -126,6 +126,10 @@
   .row-m2 .d { font-size: 11.5px; color: var(--a-mute); margin-top: 2px; padding-left: 12px; }
   .row-m2 .icons { grid-column: 2 / 4; display: flex; gap: 5px; margin-top: 4px; padding-left: 12px; }
   .stt { font-size: 11.5px; color: var(--a-mute); }
+  .hdicons { display: flex; gap: 6px; }
+  .rowsync { display: inline-flex; align-items: center; gap: 8px; }
+  .mono2 { font-family: var(--mono); font-size: 12px; font-weight: 600; }
+  .ib.amber { color: var(--a-yellow); border-color: #5a4a1a; background: #2c2716; }
   .syncbtn { font-family: var(--mono); font-size: 11.5px; font-weight: 600; color: #18181a; background: var(--a-yellow); padding: 3px 9px; border-radius: 7px; }
   @media (max-width: 720px) {
     .twocol, .grid2 { grid-template-columns: 1fr; }
@@ -304,7 +308,7 @@ machines:
   <div class="app">
     <div class="bar-strip"><span>Wi-Fi</span><span class="me">◆ 1</span><span>20:31</span></div>
     <div class="pop">
-      <div class="pop-hd2"><div class="attn">1 needs sync</div><div class="cen">3 of 4 online · updated 8s ago</div></div>
+      <div class="pop-hd2"><div><div class="attn">1 needs sync</div><div class="cen">3 of 4 online · updated 8s ago</div></div><div class="hdicons"><span class="ib" title="Open Menagerie">⧉</span><span class="ib" title="Settings">⚙</span></div></div>
       <div class="row-m2">
         <svg viewBox="0 0 30 22"><rect x="5" y="2" width="20" height="14" rx="1.5" fill="#2b2b30" stroke="#5a5a62"/><rect x="7" y="4" width="16" height="10" fill="#3d6fd8"/><rect x="1" y="16" width="28" height="3" rx="1.5" fill="#5a5a62"/></svg>
         <div><div class="n"><span class="dot" style="background:var(--a-green)"></span>richard-m4-max</div><div class="d">Workstation</div></div>
@@ -313,7 +317,7 @@ machines:
       <div class="row-m2">
         <svg viewBox="0 0 30 22"><rect x="5" y="2" width="20" height="14" rx="1.5" fill="#2b2b30" stroke="#8a8a92"/><rect x="7" y="4" width="16" height="10" fill="#1a1a1d"/><rect x="1" y="16" width="28" height="3" rx="1.5" fill="#8a8a92"/></svg>
         <div><div class="n"><span class="dot" style="background:var(--a-yellow)"></span>richard-hp-server</div><div class="d">Media server</div></div>
-        <span class="syncbtn">Sync ↓4</span>
+        <span class="rowsync"><span class="bh mono2">↓4</span><span class="ib amber" title="Sync">↻</span></span>
         <div class="icons"><span class="si" style="background:linear-gradient(135deg,#aa5cc3,#00a4dc)" title="Jellyfin">J</span><span class="si" style="background:#5b4bdb" title="Jellyseerr">S</span></div>
       </div>
       <div class="row-m2">
@@ -327,7 +331,6 @@ machines:
         <div><div class="n dim"><span class="dot hollow"></span>iphone-15-pro-max</div><div class="d">seen 2h ago</div></div>
         <span class="stt">offline</span>
       </div>
-      <div class="pop-ft"><span class="btn">Open Menagerie</span><span class="btn" style="flex:0 0 auto" title="Settings">⚙</span></div>
     </div>
   </div>
   <div>
@@ -335,7 +338,7 @@ machines:
       <li><b>The menu bar icon</b> carries the state: plain when everything is in sync, a count of machines that need attention, a spinner while syncing, red when a sync failed.</li>
       <li><b>One status vocabulary</b> in both views: a dot before the name (green in sync, amber needs attention, grey no agent, hollow offline) and the same words after it.</li>
       <li><b>No telemetry in the glance.</b> Load and battery appear here only when they are the reason for attention.</li>
-      <li><b>Sync all</b> appears in the footer only when two or more machines need it. It runs in the background and sends a notification when done.</li>
+      <li><b>Open Menagerie and Settings</b> are small icons in the top right. A machine that needs a sync shows its arrows and a sync icon. <b>Sync all</b> appears as a third icon only when two or more machines need it. It runs in the background and sends a notification when done.</li>
       <li>All numbers in these mockups are placeholders.</li>
     </ul>
   </div>
