@@ -368,6 +368,11 @@ impl Store {
         for (rev, drift) in update.drift {
             self.drift.insert(rev, drift);
         }
+        // A poll that compared with the checkout has the whole picture: a
+        // revision that is no longer behind must lose its old list.
+        if update.checkout.is_some() {
+            self.changes.clear();
+        }
         for (rev, commits) in update.changes {
             self.changes.insert(rev, commits);
         }
