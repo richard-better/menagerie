@@ -711,11 +711,12 @@ fn threshold(value: f64, warn: f64, critical: f64) -> Hsla {
 /// The load history as chart points for `range`, and its peak.
 fn chart_points(report: &protocol::Status, range: Range) -> (Vec<(f32, f32)>, f64) {
     let now = report.agent.now;
-    let start = now - range.millis();
+    // The timestamps come from another machine: keep the arithmetic total.
+    let start = now.saturating_sub(range.millis());
     let samples: Vec<_> = report
         .load_history
         .iter()
-        .filter(|s| s.at >= start)
+        .filter(|s| (start..=now).contains(&s.at))
         .collect();
     let peak = samples.iter().map(|s| s.value).fold(0.0_f64, f64::max);
     // Scale to the peak, but never so tightly that an idle machine's noise
