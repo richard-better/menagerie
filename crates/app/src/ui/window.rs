@@ -46,6 +46,8 @@ pub struct FleetWindow {
     show_changes: bool,
     show_log: bool,
     show_more: bool,
+    /// Open shells, by machine; closing one ends its session.
+    terminals: std::collections::HashMap<String, Entity<crate::terminal::TerminalView>>,
     _observe: Subscription,
     /// Re-renders every few seconds so "Updated 8s ago" stays true.
     _ticker: Task<()>,
@@ -68,6 +70,7 @@ impl FleetWindow {
             show_changes: false,
             show_log: false,
             show_more: false,
+            terminals: std::collections::HashMap::new(),
             _observe: observe,
             _ticker: ticker,
         }
@@ -257,6 +260,9 @@ impl FleetWindow {
         if let Some(text) = notice(store, name, machine, status) {
             body = body.child(section().child(notice_box(text)));
         }
+        if let Some(terminal) = self.terminals.get(name) {
+            body = body.child(section().child(terminal.clone()));
+        }
         // Open while it runs, and after a failure until the next sync.
         if let Some(job) = store.jobs.get(name)
             && (self.show_log || job.running() || matches!(job.result, Some(Err(_))))
@@ -315,6 +321,20 @@ impl FleetWindow {
                     }))
                 }),
             )
+            .child({
+                let open = self.terminals.contains_key(name);
+                let target = name.to_owned();
+                text_button(
+                    "terminal",
+                    if open { "Close terminal" } else { "Terminal" },
+                    reachable,
+                )
+                .when(reachable, |b| {
+                    b.on_click(cx.listener(move |this, _, window, cx| {
+                        this.toggle_terminal(&target, window, cx)
+                    }))
+                })
+            })
             .child(
                 text_button("log", "Log", store.jobs.contains_key(name)).on_click(cx.listener(
                     |this, _, _, cx| {
@@ -347,6 +367,30 @@ impl FleetWindow {
                 )),
             )
             .into_any_element()
+    }
+
+    /// Open a shell on `name` (here, or over SSH), or close the open one.
+    fn toggle_terminal(&mut self, name: &str, window: &mut Window, cx: &mut Context<Self>) {
+        if self.terminals.remove(name).is_some() {
+            cx.notify();
+            return;
+        }
+        let store = self.store.read(cx);
+        let Some(machine) = store.machine(name) else {
+            return;
+        };
+        let Ok(place) = crate::sync::place(name, machine, &store.hostname) else {
+            return;
+        };
+        let dir = machine
+            .sync
+            .as_ref()
+            .and_then(|s| s.repo.as_deref())
+            .map(menagerie_fleet::expand_home);
+        let view = cx.new(|cx| crate::terminal::TerminalView::new(&place, dir, cx));
+        self.terminals.insert(name.to_owned(), view.clone());
+        window.focus(&gpui::Focusable::focus_handle(view.read(cx), cx));
+        cx.notify();
     }
 
     /// What lives behind ⋯: rolling back.
