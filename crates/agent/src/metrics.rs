@@ -71,8 +71,10 @@ pub fn render(status: &Status) -> String {
             &plain(t.celsius),
         );
     }
-    if let Some(system) = &p.system.value {
-        let boot = (status.agent.now / 1000) as f64 - system.uptime_s as f64;
+    if let (Some(system), Some(at)) = (&p.system.value, p.system.at) {
+        // From when uptime was measured, so the value holds still between
+        // refreshes.
+        let boot = (at / 1000) as f64 - system.uptime_s as f64;
         gauge(
             "node_boot_time_seconds",
             "Node boot time, in unixtime.",

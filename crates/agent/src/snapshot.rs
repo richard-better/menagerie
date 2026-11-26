@@ -213,6 +213,11 @@ impl Prober {
             }
             last_tick = now;
             for (i, (kind, every)) in SCHEDULE.into_iter().enumerate() {
+                // A clock set backwards would otherwise postpone the probe
+                // until wall time caught up again.
+                if next[i] > now + every {
+                    next[i] = now;
+                }
                 if now >= next[i] {
                     self.run(kind, every);
                     next[i] = now + every;
