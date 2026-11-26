@@ -8,7 +8,8 @@ machines:
   richard-m4-max:
     role: Workstation
     device: laptop
-    agent: http://richard-m4-max:9184
+    # The Mac the app runs on reaches its own agent locally.
+    agent: http://localhost:9184
     sync: { preset: nix-darwin, repo: ~/dev/gh/richard-better/mac }
 
   richard-hp-server:
