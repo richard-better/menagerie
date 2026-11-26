@@ -3653,6 +3653,7 @@ dependencies = [
  "objc2-foundation",
  "raw-window-handle",
  "serde_json",
+ "serde_yaml_ng",
  "tray-icon",
  "ureq",
 ]

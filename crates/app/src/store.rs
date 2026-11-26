@@ -158,10 +158,13 @@ impl Store {
                 None
             }
         };
-        if fleet != self.fleet {
+        // Always take the new fleet: equality ignores machine order, which
+        // the views show.
+        let changed = fleet != self.fleet;
+        self.fleet = fleet;
+        if changed {
             // Reports and health are keyed by machine name and service
             // index, which may now mean something else.
-            self.fleet = fleet;
             self.generation += 1;
             self.live.clear();
             self.health.clear();
@@ -443,6 +446,15 @@ mod tests {
         });
         // Same contents: nothing is dropped.
         store.reload();
+        assert_eq!(store.generation, before);
+        assert!(store.report("richard-m4-max").is_some());
+
+        // Reordered machines: the new order shows, and nothing is dropped.
+        let mut fleet = store.fleet.clone().unwrap();
+        fleet.machines.reverse();
+        std::fs::write(&store.path, serde_yaml_ng::to_string(&fleet).unwrap()).unwrap();
+        store.reload();
+        assert_eq!(store.machines()[0].0, "iphone-15-pro-max");
         assert_eq!(store.generation, before);
         assert!(store.report("richard-m4-max").is_some());
 
