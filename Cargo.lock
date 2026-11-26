@@ -3679,6 +3679,7 @@ dependencies = [
  "display-info",
  "futures",
  "gpui",
+ "libc",
  "libghostty-vt",
  "menagerie-fleet",
  "menagerie-protocol",
