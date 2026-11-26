@@ -43,6 +43,9 @@ impl Range {
 pub struct FleetWindow {
     store: Entity<Store>,
     range: Range,
+    show_changes: bool,
+    show_log: bool,
+    show_more: bool,
     _observe: Subscription,
     /// Re-renders every few seconds so "Updated 8s ago" stays true.
     _ticker: Task<()>,
@@ -62,6 +65,9 @@ impl FleetWindow {
         Self {
             store,
             range: Range::Day,
+            show_changes: false,
+            show_log: false,
+            show_more: false,
             _observe: observe,
             _ticker: ticker,
         }
@@ -196,7 +202,7 @@ impl FleetWindow {
                         } else {
                             theme::mute()
                         })
-                        .child(status.label()),
+                        .child(store.label(name)),
                 );
             if active {
                 tile.bg(theme::panel())
@@ -237,10 +243,29 @@ impl FleetWindow {
             .px(px(20.))
             .pt(px(18.))
             .pb(px(20.))
-            .child(header(store, name, machine, status));
+            .child(header(
+                store,
+                name,
+                machine,
+                status,
+                self.actions(store, name, machine, status, cx),
+            ));
 
+        if self.show_more {
+            body = body.child(self.more_menu(store, name, machine, status, cx));
+        }
         if let Some(text) = notice(store, name, machine, status) {
             body = body.child(section().child(notice_box(text)));
+        }
+        if let Some(job) = store.jobs.get(name)
+            && (self.show_log || job.running())
+        {
+            body = body.child(section().child(job_log(job)));
+        }
+        if self.show_changes
+            && let Some(commits) = store.missing(name)
+        {
+            body = body.child(section().child(changes(commits)));
         }
         if machine.agent.is_some() {
             body = body.child(section().child(self.health(report, cx)));
@@ -249,6 +274,119 @@ impl FleetWindow {
             body = body.child(section().child(services(store, name, machine)));
         }
         body.into_any_element()
+    }
+
+    /// Changes, Log, Sync and the ⋯ menu.
+    fn actions(
+        &self,
+        store: &Store,
+        name: &str,
+        machine: &Machine,
+        status: Status,
+        cx: &Context<Self>,
+    ) -> AnyElement {
+        let running = store.running(name);
+        let has_changes = store.missing(name).is_some_and(|c| !c.is_empty());
+        let can_sync = machine.sync.is_some() && status.is_online() && !running;
+        let sync_label = if running {
+            store.label(name)
+        } else if matches!(status, Status::Drift { .. }) {
+            format!("Sync {}", status.label())
+        } else {
+            "Sync".to_owned()
+        };
+        let target = name.to_owned();
+        div()
+            .flex()
+            .gap(px(6.))
+            .child(
+                text_button("changes", "Changes", has_changes).when(has_changes, |b| {
+                    b.on_click(cx.listener(|this, _, _, cx| {
+                        this.show_changes = !this.show_changes;
+                        cx.notify();
+                    }))
+                }),
+            )
+            .child(
+                text_button("log", "Log", store.jobs.contains_key(name)).on_click(cx.listener(
+                    |this, _, _, cx| {
+                        this.show_log = !this.show_log;
+                        cx.notify();
+                    },
+                )),
+            )
+            .child(
+                text_button("sync", sync_label, can_sync)
+                    .when(can_sync, |b| b.bg(rgb(0x2563eb)).text_color(rgb(0xffffff)))
+                    .when(can_sync, |b| {
+                        b.on_click(cx.listener(move |this, _, _, cx| {
+                            this.show_log = true;
+                            crate::start_job(
+                                this.store.clone(),
+                                target.clone(),
+                                crate::sync::Action::Sync,
+                                cx,
+                            );
+                        }))
+                    }),
+            )
+            .child(
+                text_button("more", "⋯", machine.sync.is_some()).on_click(cx.listener(
+                    |this, _, _, cx| {
+                        this.show_more = !this.show_more;
+                        cx.notify();
+                    },
+                )),
+            )
+            .into_any_element()
+    }
+
+    /// What lives behind ⋯: rolling back.
+    fn more_menu(
+        &self,
+        store: &Store,
+        name: &str,
+        machine: &Machine,
+        status: Status,
+        cx: &Context<Self>,
+    ) -> impl IntoElement {
+        let custom = machine
+            .sync
+            .as_ref()
+            .is_some_and(|s| s.preset == menagerie_fleet::SyncPreset::Custom);
+        let can_roll_back =
+            machine.sync.is_some() && !custom && status.is_online() && !store.running(name);
+        let target = name.to_owned();
+        div()
+            .mt(px(10.))
+            .flex()
+            .justify_end()
+            .items_center()
+            .gap(px(10.))
+            .child(
+                div()
+                    .text_size(px(11.5))
+                    .text_color(theme::mute())
+                    .child(if custom {
+                        "A custom sync command can't be rolled back from here."
+                    } else {
+                        "Switch back to the generation before the current one."
+                    }),
+            )
+            .child(
+                text_button("rollback", "Roll back", can_roll_back).when(can_roll_back, |b| {
+                    b.on_click(cx.listener(move |this, _, _, cx| {
+                        this.show_more = false;
+                        this.show_log = true;
+                        crate::start_job(
+                            this.store.clone(),
+                            target.clone(),
+                            crate::sync::Action::Rollback,
+                            cx,
+                        );
+                    }))
+                }),
+            )
     }
 
     fn health(&self, report: Option<&protocol::Status>, cx: &Context<Self>) -> impl IntoElement {
@@ -500,7 +638,13 @@ fn section() -> gpui::Div {
         .border_color(theme::line())
 }
 
-fn header(store: &Store, name: &str, machine: &Machine, status: Status) -> impl IntoElement {
+fn header(
+    store: &Store,
+    name: &str,
+    machine: &Machine,
+    status: Status,
+    actions: AnyElement,
+) -> impl IntoElement {
     let details = match (&machine.sync, &machine.agent) {
         (Some(sync), _) => format!("{} sync", sync.preset.label()),
         (None, Some(_)) => "No sync configured".to_owned(),
@@ -580,25 +724,7 @@ fn header(store: &Store, name: &str, machine: &Machine, status: Status) -> impl 
                             .child(line),
                     )
                 })
-                .child(
-                    div()
-                        .mt(px(8.))
-                        .flex()
-                        .gap(px(6.))
-                        // Changes, Terminal and Sync arrive with the sync work.
-                        .child(text_button("changes", "Changes", false))
-                        .child(text_button("terminal", "Terminal", false))
-                        .child(text_button(
-                            "sync",
-                            if status.needs_sync() && matches!(status, Status::Drift { .. }) {
-                                format!("Sync {}", status.label())
-                            } else {
-                                "Sync".to_owned()
-                            },
-                            false,
-                        ))
-                        .child(text_button("more", "⋯", false)),
-                ),
+                .child(div().mt(px(8.)).child(actions)),
         )
 }
 
@@ -819,4 +945,125 @@ fn duration(secs: u64) -> String {
         3600..=86_399 => format!("{}h", secs / 3600),
         _ => format!("{}d", secs / 86_400),
     }
+}
+
+/// The latest sync or rollback: how it went, and its output.
+fn job_log(job: &crate::store::Job) -> impl IntoElement {
+    let elapsed = job
+        .finished
+        .unwrap_or_else(std::time::Instant::now)
+        .duration_since(job.started)
+        .as_secs();
+    let (state, colour) = match &job.result {
+        None => (
+            format!("{} running · {elapsed}s", job.action.label()),
+            theme::mute(),
+        ),
+        Some(Ok(())) => (
+            format!("{} finished · {elapsed}s", job.action.label()),
+            theme::green(),
+        ),
+        Some(Err(why)) => (why.clone(), rgb(0xe5534b)),
+    };
+    let running = job.running();
+    let cancel = job.cancel.clone();
+    let tail: Vec<String> = job.lines.iter().rev().take(400).rev().cloned().collect();
+    div()
+        .flex()
+        .flex_col()
+        .child(
+            div()
+                .flex()
+                .justify_between()
+                .items_center()
+                .mb(px(10.))
+                .child(
+                    div()
+                        .text_size(px(14.))
+                        .font_weight(FontWeight::BOLD)
+                        .child("Log"),
+                )
+                .child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap(px(10.))
+                        .child(
+                            div()
+                                .font_family(theme::MONO)
+                                .text_size(px(11.))
+                                .text_color(colour)
+                                .child(state),
+                        )
+                        .when(running, |el| {
+                            el.child(
+                                text_button("cancel", "Cancel", true)
+                                    .on_click(move |_, _, _| cancel.cancel()),
+                            )
+                        }),
+                ),
+        )
+        .child(
+            div()
+                .id("job-log")
+                .max_h(px(320.))
+                .overflow_y_scroll()
+                .p(px(10.))
+                .rounded(px(9.))
+                .bg(rgb(0x0f0f11))
+                .border_1()
+                .border_color(theme::line())
+                .font_family(theme::MONO)
+                .text_size(px(11.5))
+                .text_color(rgb(0xb9b9c0))
+                .when(tail.is_empty(), |el| el.child("Starting…"))
+                .children(tail.into_iter().enumerate().map(|(i, line)| {
+                    let step = line.starts_with('▸');
+                    // A link, such as Tailscale SSH asking you to sign in,
+                    // opens when clicked.
+                    let url = line
+                        .split_whitespace()
+                        .find(|w| w.starts_with("https://"))
+                        .map(str::to_owned);
+                    div()
+                        .id(("log-line", i))
+                        .when(step, |el| el.text_color(theme::ink()).mt(px(4.)))
+                        .when_some(url, |el, url| {
+                            el.text_color(rgb(0x6fa0ff))
+                                .cursor_pointer()
+                                .on_click(move |_, _, cx| cx.open_url(&url))
+                        })
+                        .child(line)
+                })),
+        )
+}
+
+/// The commits the machine is missing, newest first.
+fn changes(commits: &[(String, String)]) -> impl IntoElement {
+    div()
+        .flex()
+        .flex_col()
+        .child(
+            div()
+                .text_size(px(14.))
+                .font_weight(FontWeight::BOLD)
+                .mb(px(10.))
+                .child(format!("Changes · {} to pull", commits.len())),
+        )
+        .children(commits.iter().map(|(hash, subject)| {
+            div()
+                .flex()
+                .gap(px(12.))
+                .py(px(3.))
+                .text_size(px(12.5))
+                .child(
+                    div()
+                        .font_family(theme::MONO)
+                        .text_color(theme::mute())
+                        .w(px(64.))
+                        .flex_none()
+                        .child(hash.clone()),
+                )
+                .child(div().min_w(px(0.)).truncate().child(subject.clone()))
+        }))
 }

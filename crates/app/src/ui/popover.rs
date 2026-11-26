@@ -69,7 +69,14 @@ impl Popover {
         self.subscriptions.push(subscription);
     }
 
-    fn row(&self, name: &str, machine: &Machine, status: Status) -> impl IntoElement {
+    fn row(
+        &self,
+        name: &str,
+        machine: &Machine,
+        status: Status,
+        label: String,
+        running: bool,
+    ) -> impl IntoElement {
         let open = self.hooks.open_window.clone();
         let target = name.to_owned();
         let offline = status == Status::Offline;
@@ -135,14 +142,30 @@ impl Popover {
                         ))
                     }),
             )
-            .child(div().pt(px(2.)).child(trailing(name, status)))
+            .child(div().pt(px(2.)).child(trailing(
+                name,
+                status,
+                label,
+                running,
+                machine.sync.is_some(),
+                self.store.clone(),
+            )))
     }
 }
 
 /// What sits at the right end of a row: a quiet sync button with the
-/// ahead/behind counts when the machine needs one, otherwise its status.
-fn trailing(name: &str, status: Status) -> impl IntoElement {
-    if status.needs_sync() {
+/// ahead/behind counts when the machine needs one and can be synced,
+/// otherwise its status words.
+fn trailing(
+    name: &str,
+    status: Status,
+    label: String,
+    running: bool,
+    can_sync: bool,
+    store: Entity<Store>,
+) -> impl IntoElement {
+    if status.needs_sync() && can_sync && !running {
+        let target = name.to_owned();
         div()
             .id(SharedString::from(format!("sync-{name}")))
             .flex()
@@ -158,7 +181,13 @@ fn trailing(name: &str, status: Status) -> impl IntoElement {
             .text_size(px(11.5))
             .font_weight(FontWeight::SEMIBOLD)
             .cursor_pointer()
-            .child(status.label())
+            .hover(|s| s.bg(rgb(0x2e2e33)))
+            .on_click(move |_, _, cx| {
+                // The row behind it opens the window; this only syncs.
+                cx.stop_propagation();
+                crate::start_job(store.clone(), target.clone(), crate::sync::Action::Sync, cx);
+            })
+            .child(label)
             .child(
                 gpui::svg()
                     .path(icon::SYNC)
@@ -170,7 +199,7 @@ fn trailing(name: &str, status: Status) -> impl IntoElement {
         div()
             .text_size(px(11.5))
             .text_color(theme::mute())
-            .child(status.label())
+            .child(label)
             .into_any_element()
     }
 }
@@ -182,8 +211,14 @@ impl Render for Popover {
             .machines()
             .into_iter()
             .map(|(name, machine)| {
-                self.row(name, machine, store.status(name))
-                    .into_any_element()
+                self.row(
+                    name,
+                    machine,
+                    store.status(name),
+                    store.label(name),
+                    store.running(name),
+                )
+                .into_any_element()
             })
             .collect();
         let empty = rows.is_empty();
