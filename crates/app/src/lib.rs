@@ -115,18 +115,22 @@ pub fn open_main_window(store: Entity<Store>, machine: Option<String>, cx: &mut 
 /// Start a sync or rollback of `name`, unless one is already running. The
 /// outcome lands in the store's `jobs`, a notification says when it ends,
 /// and a poll follows so the new revision shows.
-pub fn start_job(store: Entity<Store>, name: String, action: sync::Action, cx: &mut App) {
+///
+/// Returns why it could not start, after recording that as a failed job.
+pub fn start_job(
+    store: Entity<Store>,
+    name: String,
+    action: sync::Action,
+    cx: &mut App,
+) -> Result<(), String> {
     let planned = {
         let s = store.read(cx);
         if s.running(&name) {
-            return;
+            return Ok(());
         }
         match (s.fleet.as_ref(), s.machine(&name)) {
-            (Some(fleet), Some(machine)) => {
-                let checkout = s.checkout.as_ref().and_then(|c| c.as_ref().ok());
-                sync::place(&name, machine, &s.hostname)
-                    .and_then(|place| sync::plan(action, fleet, &name, &place, checkout))
-            }
+            (Some(fleet), Some(machine)) => sync::place(&name, machine, &s.hostname)
+                .and_then(|place| sync::plan(action, fleet, &name, &place)),
             _ => Err(format!("{name} is not in the fleet file")),
         }
     };
@@ -148,8 +152,12 @@ pub fn start_job(store: Entity<Store>, name: String, action: sync::Action, cx: &
         );
         cx.notify();
     });
-    let Ok(steps) = planned else {
-        return;
+    let steps = match planned {
+        Ok(steps) => steps,
+        Err(why) => {
+            sync::notify(&format!("{} {name}: not started", action.label()), &why);
+            return Err(why);
+        }
     };
 
     // The runner blocks on child processes, so it gets its own thread; its
@@ -192,4 +200,5 @@ pub fn start_job(store: Entity<Store>, name: String, action: sync::Action, cx: &
         }
     })
     .detach();
+    Ok(())
 }
