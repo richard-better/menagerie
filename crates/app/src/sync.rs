@@ -123,7 +123,7 @@ pub fn plan(action: Action, fleet: &Fleet, name: &str, place: &Place) -> Result<
         && let Some(repo) = fleet.repo_path()
     {
         let head = sh_quote(&format!("refs/heads/{}", fleet.branch()));
-        let upstream = sh_quote(&format!("origin/{}", fleet.branch()));
+        let upstream = sh_quote(&format!("refs/remotes/origin/{}", fleet.branch()));
         let refspec = sh_quote(&format!("HEAD:refs/heads/{}", fleet.branch()));
         let script = format!(
             "cd {} || exit 1\n\
@@ -187,14 +187,14 @@ pub fn plan(action: Action, fleet: &Fleet, name: &str, place: &Place) -> Result<
         // The machine has to be on the configured branch too, or a pull
         // would quietly update some other branch.
         Action::Sync => {
-            let branch = sh_quote(fleet.branch());
-            let head = sh_quote(&format!("refs/heads/{}", fleet.branch()));
+            let pull = sh_quote(&format!("refs/heads/{}", fleet.branch()));
+            let head = pull.clone();
             format!(
                 "cd {} || exit 1\n\
                  if [ \"$(git symbolic-ref --quiet HEAD)\" != {head} ]; then\n\
                  \x20 echo \"The checkout on this machine isn't on the configured branch.\" >&2; exit 1\n\
                  fi\n\
-                 git pull --ff-only origin {branch} || exit 1\n\
+                 git pull --ff-only origin {pull} || exit 1\n\
                  {rebuild}",
                 sh_path(&repo)
             )
@@ -653,7 +653,7 @@ mod tests {
         );
         assert!(script.contains("!= 'refs/heads/main' ]"), "{script}");
         assert!(
-            script.contains("git pull --ff-only origin 'main' || exit 1\n"),
+            script.contains("git pull --ff-only origin 'refs/heads/main' || exit 1\n"),
             "{script}"
         );
         assert!(
@@ -803,6 +803,7 @@ mod tests {
         std::fs::remove_file(work.join("new.txt")).unwrap();
 
         git(&work, &["commit", "-q", "--allow-empty", "-m", "two"]);
+        git(&work, &["tag", "origin/main", "HEAD"]);
         let (lines, result) = check(&f);
         assert_eq!(result, Ok(()), "{lines:?}");
         let pushed = Command::new("git")
