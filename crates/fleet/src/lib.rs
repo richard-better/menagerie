@@ -18,6 +18,13 @@ pub const CURRENT_VERSION: u32 = 1;
 #[serde(deny_unknown_fields)]
 pub struct Fleet {
     pub version: u32,
+    /// Your local checkout of the configuration repo, which machines are
+    /// compared against. `~` expands to the home directory.
+    #[serde(default)]
+    pub repo: Option<String>,
+    /// The branch machines should be on. Defaults to `main`.
+    #[serde(default)]
+    pub branch: Option<String>,
     /// Machines in the order the file lists them, keyed by hostname.
     #[serde(default)]
     pub machines: IndexMap<String, Machine>,
@@ -123,6 +130,16 @@ pub enum Error {
 }
 
 impl Fleet {
+    /// The branch machines should be on.
+    pub fn branch(&self) -> &str {
+        self.branch.as_deref().unwrap_or("main")
+    }
+
+    /// `repo` with a leading `~` expanded.
+    pub fn repo_path(&self) -> Option<PathBuf> {
+        self.repo.as_deref().map(expand_home)
+    }
+
     /// Parse and validate a fleet file's contents.
     pub fn from_yaml(text: &str) -> Result<Self, Error> {
         let fleet: Fleet = serde_yaml_ng::from_str(text)?;
@@ -165,6 +182,18 @@ impl Fleet {
             }
         }
         Ok(())
+    }
+}
+
+/// Expand a leading `~` or `~/` to the home directory.
+pub fn expand_home(path: &str) -> PathBuf {
+    let home = || std::env::var_os("HOME").map(PathBuf::from);
+    match path.strip_prefix('~') {
+        Some("") => home().unwrap_or_else(|| PathBuf::from(path)),
+        Some(rest) if rest.starts_with('/') => home()
+            .map(|h| h.join(&rest[1..]))
+            .unwrap_or_else(|| PathBuf::from(path)),
+        _ => PathBuf::from(path),
     }
 }
 
@@ -234,6 +263,17 @@ mod tests {
         let err = Fleet::from_yaml("version: 1\nmachines:\n  a:\n    sync: { preset: custom }\n")
             .unwrap_err();
         assert!(matches!(err, Error::Invalid { .. }), "{err}");
+    }
+
+    #[test]
+    fn repo_and_branch() {
+        let fleet = Fleet::from_yaml(EXAMPLE).unwrap();
+        assert_eq!(fleet.branch(), "main");
+        let repo = fleet.repo_path().unwrap();
+        assert!(repo.ends_with("dev/gh/richard-better/mac"), "{}", repo.display());
+        assert!(!repo.starts_with("~"));
+        assert_eq!(expand_home("/abs"), PathBuf::from("/abs"));
+        assert_eq!(expand_home("~user/x"), PathBuf::from("~user/x"));
     }
 
     #[test]
