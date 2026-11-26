@@ -1,0 +1,143 @@
+{
+  "general": {
+    "reference-dashboard": {
+      "reviewers": {
+        "Grok": 7.5,
+        "Neon": 8.5,
+        "Opus": 7.5,
+        "Sol": 7.5
+      },
+      "spread": {
+        "Grok": 0.0,
+        "Neon": 0.0,
+        "Opus": 0.0,
+        "Sol": 0.0
+      },
+      "median": 7.5
+    },
+    "product": {
+      "reviewers": {
+        "Grok": 6.5,
+        "Neon": 6.0,
+        "Opus": 6.5,
+        "Sol": 7.0
+      },
+      "spread": {
+        "Grok": 0.0,
+        "Neon": 0.0,
+        "Opus": 0.0,
+        "Sol": 0.0
+      },
+      "median": 6.5
+    },
+    "reference-settings": {
+      "reviewers": {
+        "Grok": 8.0,
+        "Neon": 9.0,
+        "Opus": 8.0,
+        "Sol": 8.0
+      },
+      "spread": {
+        "Grok": 0.0,
+        "Neon": 0.0,
+        "Opus": 0.0,
+        "Sol": 0.0
+      },
+      "median": 8.0
+    }
+  },
+  "case: Glance": {
+    "reference-dashboard": {
+      "reviewers": {
+        "Grok": 1.0,
+        "Neon": 1.0,
+        "Opus": 1.0,
+        "Sol": 1.0
+      },
+      "spread": {
+        "Grok": 0.0,
+        "Neon": 0.0,
+        "Opus": 0.0,
+        "Sol": 0.0
+      },
+      "median": 1.0
+    },
+    "product": {
+      "reviewers": {
+        "Grok": 6.5,
+        "Neon": 7.0,
+        "Opus": 7.0,
+        "Sol": 7.0
+      },
+      "spread": {
+        "Grok": 0.0,
+        "Neon": 0.0,
+        "Opus": 0.0,
+        "Sol": 0.0
+      },
+      "median": 7.0
+    },
+    "reference-settings": {
+      "reviewers": {
+        "Grok": 1.0,
+        "Neon": 1.0,
+        "Opus": 1.0,
+        "Sol": 1.0
+      },
+      "spread": {
+        "Grok": 0.0,
+        "Neon": 0.0,
+        "Opus": 0.0,
+        "Sol": 0.0
+      },
+      "median": 1.0
+    }
+  },
+  "case: Control room": {
+    "reference-dashboard": {
+      "reviewers": {
+        "Grok": 1.0,
+        "Neon": 1.0,
+        "Opus": 1.0,
+        "Sol": 1.0
+      },
+      "spread": {
+        "Grok": 0.0,
+        "Neon": 0.0,
+        "Opus": 0.0,
+        "Sol": 0.0
+      },
+      "median": 1.0
+    },
+    "product": {
+      "reviewers": {
+        "Grok": 7.0,
+        "Neon": 6.0,
+        "Opus": 7.0,
+        "Sol": 7.0
+      },
+      "spread": {
+        "Grok": 0.0,
+        "Neon": 0.0,
+        "Opus": 0.0,
+        "Sol": 0.0
+      },
+      "median": 7.0
+    },
+    "reference-settings": {
+      "reviewers": {
+        "Grok": 1.0,
+        "Neon": 1.0,
+        "Opus": 1.0,
+        "Sol": 1.0
+      },
+      "spread": {
+        "Grok": 0.0,
+        "Neon": 0.0,
+        "Opus": 0.0,
+        "Sol": 0.0
+      },
+      "median": 1.0
+    }
+  }
+}
