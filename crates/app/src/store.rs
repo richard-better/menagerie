@@ -99,6 +99,9 @@ pub type Drift = Result<(u32, u32), String>;
 /// One poll's findings, applied to the store in one go.
 #[derive(Debug, Default)]
 pub struct Update {
+    /// The fleet file generation the poll was made for. A result for an
+    /// older generation is dropped; `None` always applies.
+    pub generation: Option<u64>,
     pub live: Vec<(String, Result<protocol::Status, String>)>,
     pub health: Vec<((String, usize), Health)>,
     pub drift: Vec<(String, Drift)>,
@@ -119,6 +122,8 @@ pub struct Store {
     pub updated: Option<Instant>,
     /// Asks the poller to poll now.
     pub poke: Option<UnboundedSender<()>>,
+    /// Bumped whenever the fleet file's contents change.
+    pub generation: u64,
 }
 
 impl Store {
@@ -134,6 +139,7 @@ impl Store {
             checkout: None,
             updated: None,
             poke: None,
+            generation: 0,
         };
         store.reload();
         store
@@ -142,15 +148,25 @@ impl Store {
     /// Read the fleet file again, keeping the selection if that machine
     /// still exists, and ask for a fresh poll.
     pub fn reload(&mut self) {
-        match Fleet::load(&self.path) {
+        let fleet = match Fleet::load(&self.path) {
             Ok(fleet) => {
                 self.error = None;
-                self.fleet = Some(fleet);
+                Some(fleet)
             }
             Err(err) => {
                 self.error = Some(err.to_string());
-                self.fleet = None;
+                None
             }
+        };
+        if fleet != self.fleet {
+            // Reports and health are keyed by machine name and service
+            // index, which may now mean something else.
+            self.fleet = fleet;
+            self.generation += 1;
+            self.live.clear();
+            self.health.clear();
+            self.drift.clear();
+            self.checkout = None;
         }
         let still_there = self
             .selected
@@ -191,8 +207,15 @@ impl Store {
         fresh.then_some(live.status.as_ref()).flatten()
     }
 
+    /// The machine's revision, unless its latest revision probe failed: a
+    /// revision from before a failure may no longer be what it runs.
     pub fn revision(&self, name: &str) -> Option<&protocol::Revision> {
-        self.report(name)?.probes.revision.value.as_ref()
+        let probe = &self.report(name)?.probes.revision;
+        probe
+            .error
+            .is_none()
+            .then_some(probe.value.as_ref())
+            .flatten()
     }
 
     pub fn status(&self, name: &str) -> Status {
@@ -260,6 +283,9 @@ impl Store {
     }
 
     pub fn apply(&mut self, update: Update) {
+        if update.generation.is_some_and(|g| g != self.generation) {
+            return;
+        }
         let now = Instant::now();
         for (name, result) in update.live {
             let live = self.live.entry(name).or_default();
@@ -390,6 +416,53 @@ mod tests {
             store.live["richard-m4-max"].error.as_deref(),
             Some("timed out")
         );
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn a_failing_revision_probe_is_not_in_sync() {
+        let (mut store, dir) = example_store();
+        let mut stale = report("aaaaaaa1");
+        stale.probes.revision.error = Some("unreadable".into());
+        store.apply(Update {
+            live: vec![("richard-m4-max".into(), Ok(stale))],
+            drift: vec![("aaaaaaa1".into(), Ok((0, 0)))],
+            ..Update::default()
+        });
+        assert_eq!(store.status("richard-m4-max"), Status::Online);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn a_fleet_change_drops_old_results() {
+        let (mut store, dir) = example_store();
+        let before = store.generation;
+        store.apply(Update {
+            live: vec![("richard-m4-max".into(), Ok(report("aaaaaaa1")))],
+            ..Update::default()
+        });
+        // Same contents: nothing is dropped.
+        store.reload();
+        assert_eq!(store.generation, before);
+        assert!(store.report("richard-m4-max").is_some());
+
+        let text = std::fs::read_to_string(&store.path).unwrap();
+        std::fs::write(
+            &store.path,
+            text.replace("localhost:9184", "localhost:9999"),
+        )
+        .unwrap();
+        store.reload();
+        assert_eq!(store.generation, before + 1);
+        assert!(store.report("richard-m4-max").is_none());
+
+        // A poll made before the change arrives late and is dropped.
+        store.apply(Update {
+            generation: Some(before),
+            live: vec![("richard-m4-max".into(), Ok(report("aaaaaaa1")))],
+            ..Update::default()
+        });
+        assert!(store.report("richard-m4-max").is_none());
         std::fs::remove_dir_all(dir).unwrap();
     }
 

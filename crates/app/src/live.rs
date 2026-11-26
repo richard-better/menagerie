@@ -4,9 +4,11 @@
 //! The network and git work runs on gpui's background executor, all
 //! machines at once, so one offline machine costs a single timeout rather
 //! than one per machine. Results are applied to the store in one update.
+//! `git fetch` runs in its own loop with a deadline, so a slow remote never
+//! holds up the machines' health.
 
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
 use futures::channel::mpsc::unbounded;
@@ -19,9 +21,12 @@ use crate::store::{Checkout, Drift, Health, Store, Update};
 pub const POLL_EVERY: Duration = Duration::from_secs(10);
 const FETCH_EVERY: Duration = Duration::from_secs(300);
 const HTTP_TIMEOUT: Duration = Duration::from_secs(3);
+const FETCH_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// What one poll needs to know, read from the store on the main thread.
 struct Targets {
+    /// The fleet file revision these targets came from.
+    generation: u64,
     agents: Vec<(String, String)>,
     services: Vec<((String, usize), String)>,
     repo: Option<PathBuf>,
@@ -33,21 +38,18 @@ struct Targets {
 pub fn start(store: Entity<Store>, cx: &mut App) {
     let (tx, mut pokes) = unbounded();
     store.update(cx, |store, _| store.poke = Some(tx));
+
+    let poll_store = store.clone();
     cx.spawn(async move |cx| {
-        let mut last_fetch: Option<Instant> = None;
         loop {
-            let Ok(targets) = cx.read_entity(&store, |store, _| targets(store)) else {
+            let Ok(targets) = cx.read_entity(&poll_store, |store, _| targets(store)) else {
                 return;
             };
-            let fetch = last_fetch.is_none_or(|t| t.elapsed() >= FETCH_EVERY);
-            if fetch {
-                last_fetch = Some(Instant::now());
-            }
             let update = cx
                 .background_executor()
-                .spawn(async move { poll(targets, fetch) })
+                .spawn(async move { poll(targets) })
                 .await;
-            if store
+            if poll_store
                 .update(cx, |store, cx| {
                     store.apply(update);
                     cx.notify();
@@ -65,11 +67,34 @@ pub fn start(store: Entity<Store>, cx: &mut App) {
         }
     })
     .detach();
+
+    // Fetch on its own schedule, then ask for a poll so new commits show.
+    cx.spawn(async move |cx| {
+        loop {
+            let Ok(target) = cx.read_entity(&store, |store, _| {
+                let fleet = store.fleet.as_ref()?;
+                Some((fleet.repo_path()?, fleet.branch().to_owned()))
+            }) else {
+                return;
+            };
+            if let Some((repo, branch)) = target {
+                cx.background_executor()
+                    .spawn(async move { fetch(&repo, &branch) })
+                    .await;
+                if store.update(cx, |store, _| store.refresh()).is_err() {
+                    return;
+                }
+            }
+            cx.background_executor().timer(FETCH_EVERY).await;
+        }
+    })
+    .detach();
 }
 
 fn targets(store: &Store) -> Targets {
     let machines = store.machines();
     Targets {
+        generation: store.generation,
         agents: machines
             .iter()
             .filter_map(|(name, m)| m.agent.clone().map(|a| (name.to_string(), a)))
@@ -97,7 +122,7 @@ fn targets(store: &Store) -> Targets {
     }
 }
 
-fn poll(targets: Targets, fetch: bool) -> Update {
+fn poll(targets: Targets) -> Update {
     let http: ureq::Agent = ureq::Agent::config_builder()
         .timeout_global(Some(HTTP_TIMEOUT))
         .build()
@@ -133,17 +158,13 @@ fn poll(targets: Targets, fetch: bool) -> Update {
     });
 
     let mut update = Update {
+        generation: Some(targets.generation),
         live,
         health,
         ..Update::default()
     };
 
     if let Some(repo) = &targets.repo {
-        if fetch {
-            // Best effort: offline or without credentials, the last fetch
-            // still gives a useful answer.
-            let _ = git(repo, &["fetch", "--quiet", "origin", &targets.branch]);
-        }
         let upstream = format!("origin/{}", targets.branch);
         let mut revs: Vec<String> = update
             .live
@@ -200,10 +221,23 @@ fn check_health(http: &ureq::Agent, url: &str) -> Health {
     }
 }
 
-fn git(repo: &Path, args: &[&str]) -> Result<String, String> {
-    let output = Command::new("git")
+/// A git command that can never stop to ask for anything.
+fn git_command(repo: &Path) -> Command {
+    let mut command = Command::new("git");
+    command
         .arg("-C")
         .arg(repo)
+        .env("GIT_TERMINAL_PROMPT", "0")
+        .env(
+            "GIT_SSH_COMMAND",
+            "ssh -o BatchMode=yes -o ConnectTimeout=10",
+        )
+        .stdin(Stdio::null());
+    command
+}
+
+fn git(repo: &Path, args: &[&str]) -> Result<String, String> {
+    let output = git_command(repo)
         .args(args)
         .output()
         .map_err(|e| format!("git: {e}"))?;
@@ -212,6 +246,28 @@ fn git(repo: &Path, args: &[&str]) -> Result<String, String> {
     } else {
         Err(String::from_utf8_lossy(&output.stderr).trim().to_owned())
     }
+}
+
+/// `git fetch` with a deadline. Best effort: offline or without
+/// credentials, the last fetch still gives a useful answer.
+fn fetch(repo: &Path, branch: &str) {
+    let Ok(mut child) = git_command(repo)
+        .args(["fetch", "--quiet", "origin", "--end-of-options", branch])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+    else {
+        return;
+    };
+    let started = Instant::now();
+    while started.elapsed() < FETCH_TIMEOUT {
+        if !matches!(child.try_wait(), Ok(None)) {
+            return;
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    let _ = child.kill();
+    let _ = child.wait();
 }
 
 /// How far `rev` is ahead of and behind `upstream`.
