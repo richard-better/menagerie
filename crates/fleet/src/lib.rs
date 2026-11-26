@@ -270,7 +270,11 @@ mod tests {
         let fleet = Fleet::from_yaml(EXAMPLE).unwrap();
         assert_eq!(fleet.branch(), "main");
         let repo = fleet.repo_path().unwrap();
-        assert!(repo.ends_with("dev/gh/richard-better/mac"), "{}", repo.display());
+        assert!(
+            repo.ends_with("dev/gh/richard-better/mac"),
+            "{}",
+            repo.display()
+        );
         assert!(!repo.starts_with("~"));
         assert_eq!(expand_home("/abs"), PathBuf::from("/abs"));
         assert_eq!(expand_home("~user/x"), PathBuf::from("~user/x"));
