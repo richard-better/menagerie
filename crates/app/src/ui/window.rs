@@ -47,7 +47,11 @@ pub struct FleetWindow {
     show_log: bool,
     show_more: bool,
     /// Open shells, by machine; closing one ends its session.
-    terminals: std::collections::HashMap<String, Entity<crate::terminal::TerminalView>>,
+    /// Open shells by machine, with where each one runs. Closing one ends it.
+    terminals: std::collections::HashMap<
+        String,
+        (Entity<crate::terminal::TerminalView>, crate::sync::Place),
+    >,
     _observe: Subscription,
     /// Re-renders every few seconds so "Updated 8s ago" stays true.
     _ticker: Task<()>,
@@ -55,7 +59,16 @@ pub struct FleetWindow {
 
 impl FleetWindow {
     pub fn new(store: Entity<Store>, cx: &mut Context<Self>) -> Self {
-        let observe = cx.observe(&store, |_, _, cx| cx.notify());
+        let observe = cx.observe(&store, |this: &mut Self, store, cx| {
+            // A shell whose machine is gone, or now runs elsewhere, ends.
+            let store = store.read(cx);
+            this.terminals.retain(|name, (_, place)| {
+                store.machine(name).is_some_and(|m| {
+                    crate::sync::place(name, m, &store.hostname).as_ref() == Ok(place)
+                })
+            });
+            cx.notify()
+        });
         let ticker = cx.spawn(async move |this, cx| {
             loop {
                 cx.background_executor().timer(Duration::from_secs(5)).await;
@@ -260,7 +273,7 @@ impl FleetWindow {
         if let Some(text) = notice(store, name, machine, status) {
             body = body.child(section().child(notice_box(text)));
         }
-        if let Some(terminal) = self.terminals.get(name) {
+        if let Some((terminal, _)) = self.terminals.get(name) {
             body = body.child(section().child(terminal.clone()));
         }
         // Open while it runs, and after a failure until the next sync.
@@ -324,12 +337,14 @@ impl FleetWindow {
             .child({
                 let open = self.terminals.contains_key(name);
                 let target = name.to_owned();
+                // An open session can always be closed.
+                let enabled = open || reachable;
                 text_button(
                     "terminal",
                     if open { "Close terminal" } else { "Terminal" },
-                    reachable,
+                    enabled,
                 )
-                .when(reachable, |b| {
+                .when(enabled, |b| {
                     b.on_click(cx.listener(move |this, _, window, cx| {
                         this.toggle_terminal(&target, window, cx)
                     }))
@@ -388,7 +403,8 @@ impl FleetWindow {
             .and_then(|s| s.repo.as_deref())
             .map(menagerie_fleet::expand_home);
         let view = cx.new(|cx| crate::terminal::TerminalView::new(&place, dir, cx));
-        self.terminals.insert(name.to_owned(), view.clone());
+        self.terminals
+            .insert(name.to_owned(), (view.clone(), place));
         window.focus(&gpui::Focusable::focus_handle(view.read(cx), cx));
         cx.notify();
     }

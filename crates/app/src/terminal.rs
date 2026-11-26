@@ -2,37 +2,65 @@
 //!
 //! The shell runs on a PTY. Its output goes through libghostty-vt (Ghostty's
 //! terminal emulation library), which keeps the screen state; after each
-//! chunk the visible grid is copied into plain rows of styled runs, which is
-//! all the view draws. Keys are translated to the bytes a terminal sends and
-//! written back to the PTY.
+//! batch of output the visible grid is copied into rows of styled glyphs,
+//! which is all the view draws. Keys are translated to the bytes a terminal
+//! sends.
+//!
+//! Nothing here blocks the UI: reading, writing and reaping the child each
+//! happen on their own thread. Output crosses into the UI through a bounded
+//! channel, so a flood of output pushes back on the reader instead of
+//! piling up in memory, and each UI turn takes a capped amount of it.
 
 use std::io::{Read, Write};
-use std::sync::{Arc, Mutex};
+use std::sync::mpsc::Sender;
+use std::time::Duration;
 
-use futures::StreamExt;
+use futures::{SinkExt, StreamExt};
 use gpui::{
     Context, FocusHandle, Focusable, FontWeight, IntoElement, KeyDownEvent, ParentElement, Render,
     Rgba, Styled, Task, Window, div, prelude::*, px, rgb,
 };
+use libghostty_vt::mode::Mode;
 use libghostty_vt::render::{CellIterator, RowIterator};
+use libghostty_vt::screen::CellWide;
 use libghostty_vt::{RenderState, Terminal};
-use portable_pty::{Child, CommandBuilder, MasterPty, PtySize, native_pty_system};
+use portable_pty::{ChildKiller, CommandBuilder, MasterPty, PtySize, native_pty_system};
 
 use crate::sync::Place;
 use crate::theme;
 
 const FONT_SIZE: f32 = 12.;
 const LINE_HEIGHT: f32 = 16.;
+/// Menlo's advance at 12pt, to size the grid.
+const CELL_WIDTH: f32 = 7.23;
 pub const COLS: u16 = 100;
 pub const ROWS: u16 = 22;
+/// Output chunks the reader may get ahead of the UI by (8 KiB each).
+const QUEUE: usize = 16;
+/// Output chunks handled per UI turn before letting a frame through.
+const PER_TURN: usize = 32;
 
-/// A run of cells that share a style.
+/// One drawn glyph and the grid columns it covers.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Glyph {
+    pub col: u16,
+    pub width: u16,
+    pub text: String,
+}
+
+/// Glyphs that share a style.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Run {
-    pub text: String,
+    pub glyphs: Vec<Glyph>,
     pub fg: Option<(u8, u8, u8)>,
     pub bg: Option<(u8, u8, u8)>,
     pub bold: bool,
+}
+
+impl Run {
+    fn text(&self) -> String {
+        self.glyphs.iter().map(|g| g.text.as_str()).collect()
+    }
 }
 
 /// Turns PTY output into rows of runs.
@@ -45,7 +73,7 @@ pub struct Screen {
 
 impl Screen {
     /// `reply` receives what the terminal answers to queries (cursor
-    /// position reports and the like), to write back to the PTY.
+    /// position reports and the like), to send back to the PTY.
     pub fn new(cols: u16, rows: u16, reply: impl FnMut(&[u8]) + 'static) -> Result<Self, String> {
         let mut term = Terminal::new(cols, rows).map_err(|e| e.to_string())?;
         let reply = std::cell::RefCell::new(reply);
@@ -63,6 +91,10 @@ impl Screen {
         self.term.vt_write(bytes);
     }
 
+    fn mode(&self, mode: Mode) -> bool {
+        self.term.mode(mode).unwrap_or(false)
+    }
+
     /// The visible rows, and the cursor's cell when it should show.
     pub fn snapshot(&mut self) -> (Vec<Vec<Run>>, Option<(u16, u16)>) {
         let mut out = Vec::new();
@@ -78,29 +110,44 @@ impl Screen {
         let Ok(mut rows) = self.rows.update(&snapshot) else {
             return (out, cursor);
         };
-        let mut text = String::new();
         while let Some(row) = rows.next() {
             let mut runs: Vec<Run> = Vec::new();
             if let Ok(mut cells) = self.cells.update(row) {
+                let mut col: u16 = 0;
                 while let Some(cell) = cells.next() {
-                    text.clear();
+                    let wide = cell
+                        .raw_cell()
+                        .and_then(|c| c.wide())
+                        .unwrap_or(CellWide::Narrow);
+                    let width = match wide {
+                        // Covered by the wide glyph before it.
+                        CellWide::SpacerTail => {
+                            col += 1;
+                            continue;
+                        }
+                        CellWide::Wide => 2,
+                        _ => 1,
+                    };
+                    let mut text = String::new();
                     if cell.graphemes_utf8(&mut text).is_err() || text.is_empty() {
                         text.push(' ');
                     }
                     let fg = cell.fg_color().ok().flatten().map(|c| (c.r, c.g, c.b));
                     let bg = cell.bg_color().ok().flatten().map(|c| (c.r, c.g, c.b));
                     let bold = cell.style().map(|s| s.bold).unwrap_or(false);
+                    let glyph = Glyph { col, width, text };
                     match runs.last_mut() {
                         Some(run) if run.fg == fg && run.bg == bg && run.bold == bold => {
-                            run.text.push_str(&text)
+                            run.glyphs.push(glyph)
                         }
                         _ => runs.push(Run {
-                            text: text.clone(),
+                            glyphs: vec![glyph],
                             fg,
                             bg,
                             bold,
                         }),
                     }
+                    col += 1;
                 }
             }
             out.push(runs);
@@ -110,26 +157,37 @@ impl Screen {
 }
 
 /// The bytes a terminal sends for a key press, or `None` for keys it
-/// doesn't send (Command shortcuts belong to the app).
+/// doesn't send (Command shortcuts belong to the app). `app_cursor` is the
+/// terminal's application cursor mode, in which arrows send `ESC O`.
 pub fn key_bytes(
     key: &str,
     key_char: Option<&str>,
     control: bool,
     alt: bool,
     platform: bool,
+    app_cursor: bool,
 ) -> Option<Vec<u8>> {
     if platform {
         return None;
     }
+    let arrow = |c: u8| {
+        let mut b = if app_cursor {
+            b"\x1bO".to_vec()
+        } else {
+            b"\x1b[".to_vec()
+        };
+        b.push(c);
+        Some(b)
+    };
     let named: Option<&[u8]> = match key {
+        "up" => return arrow(b'A'),
+        "down" => return arrow(b'B'),
+        "right" => return arrow(b'C'),
+        "left" => return arrow(b'D'),
         "enter" => Some(b"\r"),
         "backspace" => Some(b"\x7f"),
         "tab" => Some(b"\t"),
         "escape" => Some(b"\x1b"),
-        "up" => Some(b"\x1b[A"),
-        "down" => Some(b"\x1b[B"),
-        "right" => Some(b"\x1b[C"),
-        "left" => Some(b"\x1b[D"),
         "home" => Some(b"\x1b[H"),
         "end" => Some(b"\x1b[F"),
         "delete" => Some(b"\x1b[3~"),
@@ -158,12 +216,36 @@ pub fn key_bytes(
     Some(bytes)
 }
 
+/// Pasted text, bracketed when the program asked for it so a multi-line
+/// paste isn't run line by line.
+pub fn paste_bytes(text: &str, bracketed: bool) -> Vec<u8> {
+    if bracketed {
+        // A paste can't end the bracket early.
+        let text = text.replace("\x1b[201~", "");
+        [b"\x1b[200~".as_slice(), text.as_bytes(), b"\x1b[201~"].concat()
+    } else {
+        text.as_bytes().to_vec()
+    }
+}
+
 /// The live half of a terminal: the PTY and the process on it.
 struct Session {
-    writer: Arc<Mutex<Box<dyn Write + Send>>>,
+    /// Bytes for the PTY, written by the writer thread.
+    input: Sender<Vec<u8>>,
+    killer: Box<dyn ChildKiller + Send + Sync>,
     _master: Box<dyn MasterPty + Send>,
-    child: Box<dyn Child + Send + Sync>,
     _reader: Task<()>,
+}
+
+impl Drop for Session {
+    fn drop(&mut self) {
+        // portable-pty's kill can sleep, so it runs off the UI thread; the
+        // reaper thread collects the exit.
+        let mut killer = self.killer.clone_killer();
+        std::thread::spawn(move || {
+            let _ = killer.kill();
+        });
+    }
 }
 
 /// A shell on a machine, as a view.
@@ -237,36 +319,47 @@ impl TerminalView {
         };
         command.env("TERM", "xterm-256color");
         command.env("COLORTERM", "truecolor");
-        let child = pty
+        let mut child = pty
             .slave
             .spawn_command(command)
             .map_err(|e| e.to_string())?;
         // The child holds its own copy; the parent's must close so EOF arrives.
         drop(pty.slave);
+        let killer = child.clone_killer();
+        // Reaps the child whenever it exits, by itself or killed.
+        std::thread::spawn(move || {
+            let _ = child.wait();
+        });
 
         let mut reader = pty.master.try_clone_reader().map_err(|e| e.to_string())?;
-        let writer: Arc<Mutex<Box<dyn Write + Send>>> = Arc::new(Mutex::new(
-            pty.master.take_writer().map_err(|e| e.to_string())?,
-        ));
-
-        let reply_writer = writer.clone();
-        let screen = Screen::new(COLS, ROWS, move |data| {
-            if let Ok(mut w) = reply_writer.lock() {
-                let _ = w.write_all(data);
+        let mut writer = pty.master.take_writer().map_err(|e| e.to_string())?;
+        let (input, keys) = std::sync::mpsc::channel::<Vec<u8>>();
+        std::thread::spawn(move || {
+            for bytes in keys {
+                if writer
+                    .write_all(&bytes)
+                    .and_then(|_| writer.flush())
+                    .is_err()
+                {
+                    return;
+                }
             }
+        });
+
+        let replies = input.clone();
+        let screen = Screen::new(COLS, ROWS, move |data| {
+            let _ = replies.send(data.to_vec());
         })?;
 
-        // The reader blocks, so it gets a thread; chunks cross into gpui
-        // through a channel and are fed to the screen on the main thread
-        // (libghostty-vt handles are single-threaded).
-        let (tx, mut rx) = futures::channel::mpsc::unbounded::<Vec<u8>>();
+        let (mut tx, mut rx) = futures::channel::mpsc::channel::<Vec<u8>>(QUEUE);
         std::thread::spawn(move || {
             let mut buf = [0u8; 8192];
             loop {
                 match reader.read(&mut buf) {
                     Ok(0) | Err(_) => return,
+                    // Blocks while the queue is full: backpressure on the PTY.
                     Ok(n) => {
-                        if tx.unbounded_send(buf[..n].to_vec()).is_err() {
+                        if futures::executor::block_on(tx.send(buf[..n].to_vec())).is_err() {
                             return;
                         }
                     }
@@ -275,12 +368,22 @@ impl TerminalView {
         });
         let reader_task = cx.spawn(async move |this, cx| {
             while let Some(mut chunk) = rx.next().await {
-                // Take everything already waiting, then draw once.
-                while let Ok(more) = rx.try_recv() {
-                    chunk.extend_from_slice(&more);
+                let mut taken = 1;
+                while taken < PER_TURN {
+                    match rx.try_recv() {
+                        Ok(more) => chunk.extend_from_slice(&more),
+                        Err(_) => break,
+                    }
+                    taken += 1;
                 }
                 if this.update(cx, |view, cx| view.feed(&chunk, cx)).is_err() {
                     return;
+                }
+                if taken == PER_TURN {
+                    // Still flooding: let a frame and input through.
+                    cx.background_executor()
+                        .timer(Duration::from_millis(8))
+                        .await;
                 }
             }
             let _ = this.update(cx, |view, cx| {
@@ -292,9 +395,9 @@ impl TerminalView {
         Ok((
             screen,
             Session {
-                writer,
+                input,
+                killer,
                 _master: pty.master,
-                child,
                 _reader: reader_task,
             },
         ))
@@ -310,33 +413,19 @@ impl TerminalView {
         cx.notify();
     }
 
-    fn send(&mut self, bytes: &[u8]) {
-        let Some(session) = self.session.as_ref().filter(|_| !self.exited) else {
-            return;
-        };
-        let result = session
-            .writer
-            .lock()
-            .map_err(|e| e.to_string())
-            .and_then(|mut w| {
-                w.write_all(bytes)
-                    .and_then(|_| w.flush())
-                    .map_err(|e| e.to_string())
-            });
-        if let Err(e) = result {
-            self.error = Some(e);
+    fn send(&mut self, bytes: Vec<u8>) {
+        if let Some(session) = self.session.as_ref().filter(|_| !self.exited) {
+            let _ = session.input.send(bytes);
         }
-    }
-
-    pub fn exited(&self) -> bool {
-        self.exited
     }
 
     fn on_key(&mut self, event: &KeyDownEvent, _window: &mut Window, cx: &mut Context<Self>) {
         let k = &event.keystroke;
+        let mode = |m| self.screen.as_ref().is_some_and(|s| s.mode(m));
         if k.modifiers.platform && k.key == "v" {
             if let Some(text) = cx.read_from_clipboard().and_then(|item| item.text()) {
-                self.send(text.as_bytes());
+                let bytes = paste_bytes(&text, mode(Mode::BRACKETED_PASTE));
+                self.send(bytes);
             }
             cx.stop_propagation();
             return;
@@ -347,16 +436,11 @@ impl TerminalView {
             k.modifiers.control,
             k.modifiers.alt,
             k.modifiers.platform,
+            mode(Mode::DECCKM),
         ) {
-            self.send(&bytes);
+            self.send(bytes);
             cx.stop_propagation();
         }
-    }
-}
-
-impl Drop for Session {
-    fn drop(&mut self) {
-        let _ = self.child.kill();
     }
 }
 
@@ -375,13 +459,8 @@ impl Render for TerminalView {
         let focused = self.focus.is_focused(window);
         let cursor = self.cursor.filter(|_| focused && !self.exited);
         let rows = self.lines.iter().enumerate().map(|(y, runs)| {
-            let mut col = 0u16;
-            let mut row = div().flex().h(px(LINE_HEIGHT)).overflow_hidden();
+            let mut row = div().flex().h(px(LINE_HEIGHT));
             for run in runs {
-                let len = run.text.chars().count() as u16;
-                let cursor_here = cursor
-                    .filter(|&(cx, cy)| cy as usize == y && cx >= col && cx < col + len)
-                    .map(|(cx, _)| (cx - col) as usize);
                 let style = |text: String, inverse: bool| {
                     let mut span = div().flex_none().child(text);
                     let fg = run.fg.map(colour).unwrap_or(rgb(0xd8d8de));
@@ -399,20 +478,27 @@ impl Render for TerminalView {
                     }
                     span
                 };
-                match cursor_here {
-                    Some(at) => {
-                        let chars: Vec<char> = run.text.chars().collect();
-                        let before: String = chars[..at].iter().collect();
-                        let under: String = chars[at..=at].iter().collect();
-                        let after: String = chars[at + 1..].iter().collect();
+                // The cursor is placed by grid column, so wide and combining
+                // characters don't shift it.
+                let at = cursor
+                    .filter(|&(_, cy)| cy as usize == y)
+                    .and_then(|(cx, _)| {
+                        run.glyphs
+                            .iter()
+                            .position(|g| cx >= g.col && cx < g.col + g.width)
+                    });
+                match at {
+                    Some(i) => {
+                        let part = |glyphs: &[Glyph]| -> String {
+                            glyphs.iter().map(|g| g.text.as_str()).collect()
+                        };
                         row = row
-                            .child(style(before, false))
-                            .child(style(under, true))
-                            .child(style(after, false));
+                            .child(style(part(&run.glyphs[..i]), false))
+                            .child(style(run.glyphs[i].text.clone(), true))
+                            .child(style(part(&run.glyphs[i + 1..]), false));
                     }
-                    None => row = row.child(style(run.text.clone(), false)),
+                    None => row = row.child(style(run.text(), false)),
                 }
-                col += len;
             }
             row
         });
@@ -422,8 +508,6 @@ impl Render for TerminalView {
             .on_key_down(cx.listener(Self::on_key))
             .on_click(cx.listener(|this, _, window, _| this.focus.focus(window)))
             .w_full()
-            .h(px(LINE_HEIGHT * ROWS as f32 + 20.))
-            .p(px(10.))
             .rounded(px(9.))
             .bg(rgb(0x0f0f11))
             .border_1()
@@ -432,21 +516,37 @@ impl Render for TerminalView {
             } else {
                 theme::line()
             })
-            .overflow_hidden()
-            .font_family(theme::MONO)
-            .text_size(px(FONT_SIZE))
-            .line_height(px(LINE_HEIGHT))
-            .children(rows)
+            // The PTY is a fixed size: narrow windows scroll sideways.
+            .overflow_x_scroll()
+            .child(
+                div()
+                    .w(px(CELL_WIDTH * COLS as f32 + 20.))
+                    .h(px(LINE_HEIGHT * ROWS as f32 + 20.))
+                    .p(px(10.))
+                    .font_family(theme::MONO)
+                    .text_size(px(FONT_SIZE))
+                    .line_height(px(LINE_HEIGHT))
+                    .children(rows),
+            )
             .when(self.exited, |el| {
                 el.child(
                     div()
-                        .mt(px(4.))
+                        .px(px(10.))
+                        .pb(px(8.))
+                        .font_family(theme::MONO)
+                        .text_size(px(FONT_SIZE))
                         .text_color(theme::mute())
                         .child("[session ended]"),
                 )
             })
             .when_some(self.error.clone(), |el, e| {
-                el.child(div().text_color(rgb(0xe5534b)).child(e))
+                el.child(
+                    div()
+                        .px(px(10.))
+                        .pb(px(8.))
+                        .text_color(rgb(0xe5534b))
+                        .child(e),
+                )
             })
     }
 }
@@ -457,28 +557,75 @@ mod tests {
 
     #[test]
     fn keys_become_terminal_bytes() {
+        let key = |k, c, ctrl, alt, cmd| key_bytes(k, c, ctrl, alt, cmd, false);
         assert_eq!(
-            key_bytes("enter", None, false, false, false),
+            key("enter", None, false, false, false),
             Some(b"\r".to_vec())
         );
-        assert_eq!(key_bytes("c", Some("c"), true, false, false), Some(vec![3]));
+        assert_eq!(key("c", Some("c"), true, false, false), Some(vec![3]));
         assert_eq!(
-            key_bytes("up", None, false, false, false),
+            key("up", None, false, false, false),
             Some(b"\x1b[A".to_vec())
         );
         assert_eq!(
-            key_bytes("a", Some("a"), false, false, false),
+            key("a", Some("a"), false, false, false),
             Some(b"a".to_vec())
         );
         assert_eq!(
-            key_bytes("b", Some("b"), false, true, false),
+            key("b", Some("b"), false, true, false),
             Some(b"\x1bb".to_vec())
         );
-        assert_eq!(key_bytes("c", None, false, false, true), None);
+        assert_eq!(key("c", None, false, false, true), None);
         assert_eq!(
-            key_bytes("2", Some("é"), false, false, false),
+            key("2", Some("é"), false, false, false),
             Some("é".as_bytes().to_vec())
         );
+        // Application cursor mode, as less and vim ask for.
+        assert_eq!(
+            key_bytes("up", None, false, false, false, true),
+            Some(b"\x1bOA".to_vec())
+        );
+    }
+
+    #[test]
+    fn pastes_are_bracketed_when_asked() {
+        assert_eq!(paste_bytes("a\nb", false), b"a\nb");
+        assert_eq!(paste_bytes("a\nb", true), b"\x1b[200~a\nb\x1b[201~");
+        assert_eq!(
+            paste_bytes("x\x1b[201~rm -rf", true),
+            b"\x1b[200~xrm -rf\x1b[201~"
+        );
+    }
+
+    #[test]
+    fn the_screen_follows_modes() {
+        let mut screen = Screen::new(10, 2, |_| {}).unwrap();
+        assert!(!screen.mode(Mode::DECCKM));
+        screen.write(b"\x1b[?1h\x1b[?2004h");
+        assert!(screen.mode(Mode::DECCKM));
+        assert!(screen.mode(Mode::BRACKETED_PASTE));
+    }
+
+    #[test]
+    fn wide_glyphs_cover_two_columns_and_the_cursor_follows_columns() {
+        let mut screen = Screen::new(10, 2, |_| {}).unwrap();
+        screen.write("a界b".as_bytes());
+        let (rows, cursor) = screen.snapshot();
+        let glyphs: Vec<(u16, u16, String)> = rows[0]
+            .iter()
+            .flat_map(|r| r.glyphs.iter())
+            .take(3)
+            .map(|g| (g.col, g.width, g.text.clone()))
+            .collect();
+        assert_eq!(
+            glyphs,
+            vec![
+                (0, 1, "a".to_owned()),
+                (1, 2, "界".to_owned()),
+                (3, 1, "b".to_owned())
+            ]
+        );
+        assert_eq!(cursor, Some((4, 0)));
     }
 
     /// A real shell on a real PTY: what is typed reaches it, and what it
@@ -512,14 +659,14 @@ mod tests {
         let text = |screen: &mut Screen| -> String {
             let (rows, _) = screen.snapshot();
             rows.iter()
-                .map(|r| r.iter().map(|run| run.text.as_str()).collect::<String>())
+                .map(|r| r.iter().map(Run::text).collect::<String>())
                 .collect::<Vec<_>>()
                 .join("\n")
         };
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
         let mut typed = false;
         while std::time::Instant::now() < deadline {
-            if let Ok(chunk) = rx.recv_timeout(std::time::Duration::from_millis(100)) {
+            if let Ok(chunk) = rx.recv_timeout(Duration::from_millis(100)) {
                 screen.write(&chunk);
             }
             let shown = text(&mut screen);
@@ -545,9 +692,12 @@ mod tests {
         // Ask where the cursor is: the terminal answers on the PTY.
         screen.write(b"\x1b[6n");
         let (rows, cursor) = screen.snapshot();
-        let line: String = rows[0].iter().map(|r| r.text.as_str()).collect();
+        let line: String = rows[0].iter().map(Run::text).collect();
         assert_eq!(line.trim_end(), "abred");
-        let red = rows[0].iter().find(|r| r.text.starts_with("red")).unwrap();
+        let red = rows[0]
+            .iter()
+            .find(|r| r.text().starts_with("red"))
+            .unwrap();
         assert!(red.fg.is_some_and(|(r, g, _)| r > g), "{:?}", red.fg);
         assert_eq!(cursor, Some((4, 1)));
         assert_eq!(replies.borrow().as_slice(), b"\x1b[2;5R");
