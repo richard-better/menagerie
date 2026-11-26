@@ -27,9 +27,15 @@ pub fn render(status: &Status) -> String {
         gauge("node_load15", "15m load average.", &plain(load.fifteen));
     }
     if let Some(memory) = &p.memory.value {
+        // node_exporter names total memory differently per platform.
+        let total = if cfg!(target_os = "linux") {
+            "node_memory_MemTotal_bytes"
+        } else {
+            "node_memory_total_bytes"
+        };
         gauge(
-            "node_memory_total_bytes",
-            "Memory information field total_bytes.",
+            total,
+            "Total memory in bytes.",
             &plain(memory.total_bytes as f64),
         );
         gauge(
