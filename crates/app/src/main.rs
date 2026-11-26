@@ -28,18 +28,14 @@ fn main() {
 
         // The status item's count follows the store.
         let badge = tray.clone();
-        let count = |store: &Store| {
-            store
-                .machines()
-                .iter()
-                .filter(|(name, _)| store.status(name).needs_sync())
-                .count()
-        };
-        badge.set_count(count(store.read(cx)));
+        badge.set_count(store.read(cx).needs_sync_count());
         cx.observe(&store, move |store, cx| {
-            badge.set_count(count(store.read(cx)))
+            badge.set_count(store.read(cx).needs_sync_count())
         })
         .detach();
+
+        // Poll the agents, service health and git for as long as the app runs.
+        menagerie_app::live::start(store.clone(), cx);
 
         // The popover's hooks need the panel, which exists only once its
         // window does.
