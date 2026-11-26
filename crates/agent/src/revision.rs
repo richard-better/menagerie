@@ -99,24 +99,30 @@ fn home_manager(roots: &Roots) -> Result<Option<Revision>, String> {
 
 /// The number of the generation that is running: the `<profile>-N-link`
 /// beside `profile` that resolves to the same store path as `current`. The
-/// profile's own link is not enough, since it can point at a newer
-/// generation that was built but not activated.
+/// profile's own link is preferred, but it can point at a newer generation
+/// that was built and not activated. Several old links can share a store
+/// path; with no single answer, none is given.
 fn generation(profile: &Path, current: &Path) -> Option<u64> {
     let running = std::fs::canonicalize(current).ok()?;
-    let prefix = format!("{}-", profile.file_name()?.to_str()?);
-    std::fs::read_dir(profile.parent()?)
+    let name = profile.file_name()?.to_str()?;
+    let number = |link: &std::ffi::OsStr| -> Option<u64> {
+        link.to_str()?
+            .strip_prefix(name)?
+            .strip_prefix('-')?
+            .strip_suffix("-link")?
+            .parse()
+            .ok()
+    };
+    if std::fs::canonicalize(profile).ok()? == running {
+        return number(std::fs::read_link(profile).ok()?.file_name()?);
+    }
+    let mut matches = std::fs::read_dir(profile.parent()?)
         .ok()?
         .flatten()
-        .find_map(|entry| {
-            let name = entry.file_name();
-            let number = name
-                .to_str()?
-                .strip_prefix(&prefix)?
-                .strip_suffix("-link")?
-                .parse()
-                .ok()?;
-            (std::fs::canonicalize(entry.path()).ok()? == running).then_some(number)
-        })
+        .filter(|entry| std::fs::canonicalize(entry.path()).ok().as_ref() == Some(&running))
+        .filter_map(|entry| number(&entry.file_name()));
+    let only = matches.next()?;
+    matches.next().is_none().then_some(only)
 }
 
 #[cfg(test)]
@@ -170,6 +176,26 @@ mod tests {
         assert!(rev.dirty);
         assert_eq!(rev.generation, Some(412));
         assert_eq!(rev.source, RevisionSource::NixDarwin);
+    }
+
+    #[test]
+    fn prefers_the_profile_when_old_links_share_its_path() {
+        let dir = tempfile::tempdir().unwrap();
+        let r = roots(dir.path());
+        let running = generations(&r.system_profile, &r.current_system, &[5, 6], 6);
+        // Generation 7 was switched back to the same store path as 6.
+        let profiles = r.system_profile.parent().unwrap();
+        std::os::unix::fs::symlink(&running, profiles.join("system-7-link")).unwrap();
+        std::fs::remove_file(&r.system_profile).unwrap();
+        std::os::unix::fs::symlink("system-7-link", &r.system_profile).unwrap();
+        assert_eq!(generation(&r.system_profile, &r.current_system), Some(7));
+
+        // Running an older path that two links share: no single answer.
+        let profile5 = profiles.join("store/5");
+        std::os::unix::fs::symlink(&profile5, profiles.join("system-8-link")).unwrap();
+        std::fs::remove_file(&r.current_system).unwrap();
+        std::os::unix::fs::symlink(&profile5, &r.current_system).unwrap();
+        assert_eq!(generation(&r.system_profile, &r.current_system), None);
     }
 
     #[test]
