@@ -17,6 +17,10 @@ use menagerie_app::ui::popover::{self, Hooks, Popover};
 use menagerie_app::{assets, fleet_path, open_main_window};
 
 fn main() {
+    // sudo runs this executable as its askpass helper during a sync.
+    if std::env::var_os(menagerie_app::sync::ASKPASS_ENV).is_some() {
+        std::process::exit(menagerie_app::sync::askpass());
+    }
     Application::new().with_assets(assets::Assets).run(|cx| {
         let mtm = MainThreadMarker::new().expect("gpui runs this on the main thread");
         // After gpui's own launch handler, which sets the policy to Regular.

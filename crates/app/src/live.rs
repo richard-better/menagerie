@@ -182,6 +182,17 @@ fn poll(targets: Targets) -> Update {
                 (rev, drift)
             })
             .collect();
+        update.changes = update
+            .drift
+            .iter()
+            .filter(|(_, d)| matches!(d, Ok((_, behind)) if *behind > 0))
+            .map(|(rev, _)| {
+                (
+                    rev.clone(),
+                    crate::sync::missing_commits(repo, &upstream, rev),
+                )
+            })
+            .collect();
         update.checkout = Some(checkout(repo, &upstream));
     }
     update
