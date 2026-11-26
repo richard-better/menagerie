@@ -122,6 +122,7 @@ fn fixture() -> Update {
     let in_sync = "9b06a19f0aafcad2b703c52bd24328b6992c85f9";
     let behind = "f460dc1f0aafcad2b703c52bd24328b6992c85f9";
     Update {
+        generation: None,
         live: vec![
             (
                 "richard-m4-max".into(),
