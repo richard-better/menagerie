@@ -175,6 +175,11 @@ fn fetch_status(http: &ureq::Agent, base: &str) -> Result<protocol::Status, Stri
         .body_mut()
         .read_json()
         .map_err(|e| format!("unreadable reply: {e}"))?;
+    if let Some(rev) = &status.probes.revision.value
+        && !rev.is_valid()
+    {
+        return Err("agent reported a revision that is not a commit hash".to_owned());
+    }
     if status.version != protocol::VERSION {
         return Err(format!(
             "agent speaks protocol {}, this app speaks {}",
@@ -212,8 +217,17 @@ fn git(repo: &Path, args: &[&str]) -> Result<String, String> {
 /// How far `rev` is ahead of and behind `upstream`.
 fn ahead_behind(repo: &Path, upstream: &str, rev: &str) -> Drift {
     let range = format!("{upstream}...{rev}");
-    let out = git(repo, &["rev-list", "--left-right", "--count", &range])
-        .map_err(|_| format!("{} is not in your checkout", short(rev)))?;
+    let out = git(
+        repo,
+        &[
+            "rev-list",
+            "--left-right",
+            "--count",
+            "--end-of-options",
+            &range,
+        ],
+    )
+    .map_err(|_| format!("{} is not in your checkout", short(rev)))?;
     parse_counts(&out).map(|(behind, ahead)| (ahead, behind))
 }
 
@@ -241,7 +255,7 @@ fn parse_counts(text: &str) -> Result<(u32, u32), String> {
 }
 
 fn short(rev: &str) -> &str {
-    &rev[..rev.len().min(7)]
+    rev.get(..7).unwrap_or(rev)
 }
 
 #[cfg(test)]
@@ -314,6 +328,24 @@ mod tests {
         let base = serve_once("200 OK", body.to_string());
         let err = fetch_status(&http(), &base).unwrap_err();
         assert!(err.contains("protocol 99"), "{err}");
+    }
+
+    #[test]
+    fn rejects_a_revision_that_is_not_a_hash() {
+        let mut probes = protocol::Probes::default();
+        probes.revision.value = Some(protocol::Revision {
+            rev: "--upload-pack=touch /tmp/x".into(),
+            dirty: false,
+            generation: None,
+            source: protocol::RevisionSource::Nixos,
+        });
+        let body = serde_json::json!({
+            "version": protocol::VERSION, "host": "box",
+            "agent": { "version": "9", "now": 1 },
+            "probes": probes,
+        });
+        let base = serve_once("200 OK", body.to_string());
+        assert!(fetch_status(&http(), &base).is_err());
     }
 
     #[test]
