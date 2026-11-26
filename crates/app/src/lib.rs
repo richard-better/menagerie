@@ -12,6 +12,7 @@ pub mod assets;
 pub mod live;
 pub mod platform;
 pub mod store;
+pub mod sync;
 pub mod theme;
 pub mod ui {
     pub mod popover;
@@ -19,7 +20,7 @@ pub mod ui {
     pub mod window;
 }
 
-use store::Store;
+use store::{Job, Store};
 use ui::window::FleetWindow;
 
 /// The fleet file to read: `$MENAGERIE_FLEET` if set, else the default
@@ -109,4 +110,86 @@ pub fn open_main_window(store: Entity<Store>, machine: Option<String>, cx: &mut 
         }
         Err(err) => eprintln!("menagerie: could not open the window: {err}"),
     }
+}
+
+/// Start a sync or rollback of `name`, unless one is already running. The
+/// outcome lands in the store's `jobs`, a notification says when it ends,
+/// and a poll follows so the new revision shows.
+pub fn start_job(store: Entity<Store>, name: String, action: sync::Action, cx: &mut App) {
+    let planned = {
+        let s = store.read(cx);
+        if s.running(&name) {
+            return;
+        }
+        match (s.fleet.as_ref(), s.machine(&name)) {
+            (Some(fleet), Some(machine)) => {
+                let checkout = s.checkout.as_ref().and_then(|c| c.as_ref().ok());
+                sync::place(&name, machine, &s.hostname)
+                    .and_then(|place| sync::plan(action, fleet, &name, &place, checkout))
+            }
+            _ => Err(format!("{name} is not in the fleet file")),
+        }
+    };
+    let failed = planned.as_ref().err().cloned();
+    let cancel = sync::Cancel::default();
+    let job_cancel = cancel.clone();
+    store.update(cx, |s, cx| {
+        let now = std::time::Instant::now();
+        s.jobs.insert(
+            name.clone(),
+            Job {
+                action,
+                lines: Vec::new(),
+                result: failed.clone().map(Err),
+                started: now,
+                finished: failed.as_ref().map(|_| now),
+                cancel: job_cancel,
+            },
+        );
+        cx.notify();
+    });
+    let Ok(steps) = planned else {
+        return;
+    };
+
+    // The runner blocks on child processes, so it gets its own thread; its
+    // events cross into gpui through an async channel.
+    let (tx, rx) = std::sync::mpsc::channel();
+    let (forward, mut events) = futures::channel::mpsc::unbounded();
+    std::thread::spawn(move || sync::run(steps, tx, cancel));
+    std::thread::spawn(move || {
+        for event in rx {
+            if forward.unbounded_send(event).is_err() {
+                return;
+            }
+        }
+    });
+    cx.spawn(async move |cx| {
+        use futures::StreamExt;
+        while let Some(event) = events.next().await {
+            let done = matches!(event, sync::Event::Done(_));
+            let _ = store.update(cx, |s, cx| {
+                if let Some(job) = s.jobs.get_mut(&name) {
+                    match event {
+                        sync::Event::Line(line) => job.push(line),
+                        sync::Event::Done(result) => {
+                            let (title, body) = match &result {
+                                Ok(()) => (format!("{} finished", action.label()), name.clone()),
+                                Err(why) => (format!("{} failed", action.label()), why.clone()),
+                            };
+                            sync::notify(&title, &body);
+                            job.result = Some(result);
+                            job.finished = Some(std::time::Instant::now());
+                            s.refresh();
+                        }
+                    }
+                }
+                cx.notify();
+            });
+            if done {
+                return;
+            }
+        }
+    })
+    .detach();
 }

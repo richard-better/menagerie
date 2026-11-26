@@ -92,6 +92,34 @@ pub struct Checkout {
     pub dirty: bool,
 }
 
+/// A sync or rollback, running or finished.
+#[derive(Debug, Clone)]
+pub struct Job {
+    pub action: crate::sync::Action,
+    /// Its output so far; the oldest lines are dropped past `JOB_LINES`.
+    pub lines: Vec<String>,
+    /// `None` while it runs.
+    pub result: Option<Result<(), String>>,
+    pub started: Instant,
+    pub finished: Option<Instant>,
+    pub cancel: crate::sync::Cancel,
+}
+
+pub const JOB_LINES: usize = 2000;
+
+impl Job {
+    pub fn running(&self) -> bool {
+        self.result.is_none()
+    }
+
+    pub fn push(&mut self, line: String) {
+        if self.lines.len() == JOB_LINES {
+            self.lines.remove(0);
+        }
+        self.lines.push(line);
+    }
+}
+
 /// How far a revision is `(ahead, behind)` your upstream branch, or why
 /// that could not be worked out.
 pub type Drift = Result<(u32, u32), String>;
@@ -105,6 +133,8 @@ pub struct Update {
     pub live: Vec<(String, Result<protocol::Status, String>)>,
     pub health: Vec<((String, usize), Health)>,
     pub drift: Vec<(String, Drift)>,
+    /// Commits each revision is missing, newest first.
+    pub changes: Vec<(String, Vec<(String, String)>)>,
     pub checkout: Option<Result<Checkout, String>>,
 }
 
@@ -124,6 +154,12 @@ pub struct Store {
     pub poke: Option<UnboundedSender<()>>,
     /// Bumped whenever the fleet file's contents change.
     pub generation: u64,
+    /// Syncs and rollbacks by machine, the latest per machine.
+    pub jobs: HashMap<String, Job>,
+    /// Commits each revision is missing, for the Changes view.
+    pub changes: HashMap<String, Vec<(String, String)>>,
+    /// This Mac's short hostname, to tell which machine it is.
+    pub hostname: String,
 }
 
 impl Store {
@@ -140,6 +176,9 @@ impl Store {
             updated: None,
             poke: None,
             generation: 0,
+            jobs: HashMap::new(),
+            changes: HashMap::new(),
+            hostname: crate::sync::hostname(),
         };
         store.reload();
         store
@@ -169,6 +208,7 @@ impl Store {
             self.live.clear();
             self.health.clear();
             self.drift.clear();
+            self.changes.clear();
             self.checkout = None;
         }
         let still_there = self
@@ -245,6 +285,27 @@ impl Store {
         }
     }
 
+    /// The status words to show, with a running sync taking precedence.
+    pub fn label(&self, name: &str) -> String {
+        match self.jobs.get(name) {
+            Some(job) if job.running() => match job.action {
+                crate::sync::Action::Sync => "syncing".to_owned(),
+                crate::sync::Action::Rollback => "rolling back".to_owned(),
+            },
+            _ => self.status(name).label(),
+        }
+    }
+
+    pub fn running(&self, name: &str) -> bool {
+        self.jobs.get(name).is_some_and(Job::running)
+    }
+
+    /// The commits the machine is missing, when it is behind.
+    pub fn missing(&self, name: &str) -> Option<&[(String, String)]> {
+        let revision = self.revision(name)?;
+        self.changes.get(&revision.rev).map(Vec::as_slice)
+    }
+
     pub fn select(&mut self, name: &str) {
         if self.machine(name).is_some() {
             self.selected = Some(name.to_owned());
@@ -307,6 +368,9 @@ impl Store {
         for (rev, drift) in update.drift {
             self.drift.insert(rev, drift);
         }
+        for (rev, commits) in update.changes {
+            self.changes.insert(rev, commits);
+        }
         if let Some(checkout) = update.checkout {
             self.checkout = Some(checkout);
         }
@@ -362,11 +426,11 @@ mod tests {
         (store, dir)
     }
 
-    fn rand_suffix() -> u128 {
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos()
+    /// Unique per test in this process; timestamps alone collide when tests
+    /// start in the same microsecond.
+    fn rand_suffix() -> usize {
+        static NEXT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+        NEXT.fetch_add(1, std::sync::atomic::Ordering::SeqCst)
     }
 
     #[test]

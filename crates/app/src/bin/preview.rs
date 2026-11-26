@@ -153,6 +153,21 @@ fn fixture() -> Update {
         ],
         health: vec![(("richard-hp-server".into(), 0), Health::Up { millis: 12 })],
         drift: vec![(in_sync.into(), Ok((0, 0))), (behind.into(), Ok((0, 4)))],
+        changes: vec![(
+            behind.into(),
+            vec![
+                (
+                    "a1b2c3d".into(),
+                    "feat(fleet): add menagerie host metadata".into(),
+                ),
+                ("7c6d5e4".into(), "found climb updates".into()),
+                ("3e2f1a0".into(), "coderndom".into()),
+                (
+                    "b0a711b".into(),
+                    "refactor(hosts): give every machine its own host file".into(),
+                ),
+            ],
+        )],
         checkout: Some(Ok(Checkout {
             unpushed: 1,
             unpulled: 0,
