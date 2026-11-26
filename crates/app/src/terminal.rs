@@ -13,9 +13,9 @@
 
 use std::io::{Read, Write};
 use std::os::fd::{AsRawFd, BorrowedFd, OwnedFd, RawFd};
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::mpsc::SyncSender;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use futures::{SinkExt, StreamExt};
@@ -80,6 +80,11 @@ impl Screen {
     /// position reports and the like), to send back to the PTY.
     pub fn new(cols: u16, rows: u16, reply: impl FnMut(&[u8]) + 'static) -> Result<Self, String> {
         let mut term = Terminal::new(cols, rows).map_err(|e| e.to_string())?;
+        // Nothing here draws images, so APC payloads (Kitty graphics and
+        // the like) are refused rather than buffered on the UI thread.
+        term.set_apc_max_bytes(Some(0))
+            .and_then(|t| t.set_unknown_max_bytes(0))
+            .map_err(|e| e.to_string())?;
         let reply = std::cell::RefCell::new(reply);
         term.on_pty_write(move |_, data| (reply.borrow_mut())(data))
             .map_err(|e| e.to_string())?;
@@ -247,11 +252,34 @@ const POLL_MS: i32 = 100;
 /// What the UI and the PTY threads share.
 #[derive(Default)]
 struct Shared {
+    /// The shell's PID once it runs, 0 before.
+    pid: std::sync::atomic::AtomicI32,
+    /// Set by the supervisor once it has reaped the shell.
+    reaped: AtomicBool,
     /// Set when the terminal is closed: the threads stop, queued input is
     /// discarded, and the shell is ended.
     closed: AtomicBool,
     /// Bytes queued for the writer thread.
     pending: AtomicUsize,
+}
+
+/// Every shell that may still be running, for quitting.
+static SHELLS: Mutex<Vec<std::sync::Weak<Shared>>> = Mutex::new(Vec::new());
+
+/// Kill every shell outright. For quitting: gpui gives quit handlers 100 ms,
+/// too short for the hang-up grace period. Only unreaped shells are signalled.
+pub fn kill_all() {
+    let shells = SHELLS.lock().map(|s| s.clone()).unwrap_or_default();
+    for shared in shells.iter().filter_map(std::sync::Weak::upgrade) {
+        shared.close();
+        let pid = shared.pid.load(Ordering::SeqCst);
+        if pid > 0 && !shared.reaped.load(Ordering::SeqCst) {
+            unsafe {
+                libc::kill(-pid, libc::SIGKILL);
+                libc::kill(pid, libc::SIGKILL);
+            }
+        }
+    }
 }
 
 impl Shared {
@@ -275,6 +303,7 @@ fn supervise(mut child: Box<dyn Child + Send + Sync>, shared: Arc<Shared>) {
     let mut hung_up: Option<std::time::Instant> = None;
     loop {
         if !matches!(child.try_wait(), Ok(None)) {
+            shared.reaped.store(true, Ordering::SeqCst);
             return;
         }
         if shared.is_closed()
@@ -388,6 +417,13 @@ fn spawn_shell(place: Place, dir: Option<std::path::PathBuf>) -> Result<Spawned,
     // The child holds its own copy; the parent's must close so EOF arrives.
     drop(pty.slave);
     let shared = Arc::new(Shared::default());
+    if let Some(pid) = child.process_id().and_then(|p| i32::try_from(p).ok()) {
+        shared.pid.store(pid, Ordering::SeqCst);
+    }
+    if let Ok(mut shells) = SHELLS.lock() {
+        shells.retain(|w| w.strong_count() > 0);
+        shells.push(Arc::downgrade(&shared));
+    }
     {
         let shared = shared.clone();
         std::thread::spawn(move || supervise(child, shared));
@@ -593,6 +629,9 @@ impl TerminalView {
             }
             let _ = this.update(cx, |view, cx| {
                 view.exited = true;
+                // The rows already drawn stay; the PTY and threads go.
+                view.session = None;
+                view.screen = None;
                 cx.notify();
             });
         });
@@ -996,6 +1035,57 @@ mod tests {
         let mut buf = [0u8; 16];
         let err = file.read(&mut buf).unwrap_err();
         assert_eq!(err.kind(), std::io::ErrorKind::WouldBlock);
+    }
+
+    /// Quitting doesn't wait for a shell that ignores SIGHUP.
+    #[test]
+    fn kill_all_ends_shells_at_once() {
+        let pty = native_pty_system()
+            .openpty(PtySize {
+                rows: 5,
+                cols: 40,
+                pixel_width: 0,
+                pixel_height: 0,
+            })
+            .unwrap();
+        let mut command = CommandBuilder::new("/bin/sh");
+        command.args(["-c", "trap '' HUP; sleep 30"]);
+        let child = pty.slave.spawn_command(command).unwrap();
+        drop(pty.slave);
+        let shared = Arc::new(Shared::default());
+        shared
+            .pid
+            .store(child.process_id().unwrap() as i32, Ordering::SeqCst);
+        SHELLS.lock().unwrap().push(Arc::downgrade(&shared));
+        let supervisor = {
+            let shared = shared.clone();
+            std::thread::spawn(move || supervise(child, shared))
+        };
+        std::thread::sleep(Duration::from_millis(300));
+        let started = std::time::Instant::now();
+        kill_all();
+        while !supervisor.is_finished() {
+            assert!(
+                started.elapsed() < CLOSE_GRACE,
+                "quit waited for the grace period"
+            );
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        assert!(shared.reaped.load(Ordering::SeqCst));
+        drop(pty.master);
+    }
+
+    #[test]
+    fn graphics_payloads_are_refused() {
+        let mut screen = Screen::new(20, 2, |_| {}).unwrap();
+        // A Kitty graphics command with a large payload, then text.
+        let mut bytes = b"\x1b_Ga=T,f=24;".to_vec();
+        bytes.extend(std::iter::repeat_n(b'A', 1 << 20));
+        bytes.extend_from_slice(b"\x1b\\after");
+        screen.write(&bytes);
+        let (rows, _) = screen.snapshot();
+        let line: String = rows[0].iter().map(Run::text).collect();
+        assert_eq!(line.trim_end(), "after");
     }
 
     #[test]

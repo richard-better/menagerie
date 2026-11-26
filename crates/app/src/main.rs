@@ -38,6 +38,13 @@ fn main() {
         })
         .detach();
 
+        // Quitting ends every open shell at once.
+        cx.on_app_quit(|_| {
+            menagerie_app::terminal::kill_all();
+            async {}
+        })
+        .detach();
+
         // Poll the agents, service health and git for as long as the app runs.
         menagerie_app::live::start(store.clone(), cx);
 
