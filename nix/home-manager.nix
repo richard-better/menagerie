@@ -2,6 +2,14 @@
 # systemd user service on Linux. It runs as the user because the Home
 # Manager revision lives in their home directory; the system revision files
 # it also reads are world-readable.
+#
+# On nix-darwin and NixOS the agent reports `system.configurationRevision`.
+# A machine that only runs Home Manager has nothing equivalent, so to show
+# which commit built it, write the revision into each generation yourself:
+#
+#   home.extraBuilderCommands = ''
+#     printf '%s' ${self.rev or self.dirtyRev} > "$out/configuration-revision"
+#   '';
 self:
 {
   config,
