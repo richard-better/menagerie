@@ -58,7 +58,6 @@
   .m svg { height: 44px; display: block; margin: 0 auto 8px; }
   .m .nm { font-size: 12.5px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .m .st { font-size: 11px; margin-top: 3px; font-family: var(--mono); }
-  .svcrow { display: flex; gap: 5px; justify-content: center; margin-top: 8px; min-height: 22px; }
   .si { width: 22px; height: 22px; border-radius: 6px; display: inline-flex; align-items: center; justify-content: center; font-size: 11px; font-weight: 700; color: #fff; position: relative; }
   .si.down::after { content: ""; position: absolute; right: -2px; top: -2px; width: 7px; height: 7px; border-radius: 50%; background: var(--a-yellow); border: 1.5px solid var(--a-bg); }
   .addm { flex: 0 0 56px; display: flex; align-items: center; justify-content: center; color: var(--a-faint); font-size: 22px; border: 1px dashed var(--a-line); border-radius: 12px; margin: 8px 0 12px; }
@@ -89,8 +88,6 @@
   .ico { width: 32px; height: 32px; border-radius: 8px; display: flex; align-items: center; justify-content: center; font-size: 15px; font-weight: 700; color: #fff; flex: 0 0 32px; }
   .tile .t { font-size: 13px; font-weight: 600; }
   .tile .s { font-size: 11px; color: var(--a-mute); font-family: var(--mono); }
-  .term { background: #0f0f11; border: 1px solid var(--a-line); border-radius: 9px; font-family: var(--mono); font-size: 11.5px; line-height: 1.6; padding: 10px 12px; color: #b9b9c0; }
-  .term .p { color: var(--a-green); } .term .cur { display: inline-block; width: 7px; height: 13px; background: #b9b9c0; vertical-align: -2px; }
   .bar-strip { display: flex; justify-content: flex-end; gap: 14px; align-items: center; font-size: 12px; color: var(--a-mute); padding: 5px 12px; background: #2a2a2e; border: 1px solid var(--a-line); border-bottom: none; border-radius: 9px 9px 0 0; }
   .bar-strip .me { color: var(--a-ink); background: #3a3a40; border-radius: 5px; padding: 1px 6px; font-weight: 600; }
   .pop { background: var(--a-bg); border: 1px solid var(--a-line); border-radius: 0 0 14px 14px; padding: 12px; box-shadow: 0 20px 50px rgba(0,0,0,.3); }
@@ -112,17 +109,12 @@
   .dot.hollow { background: transparent; border: 1.5px solid #8d8d94; width: 5px; height: 5px; }
   .addm2 { flex: 0 0 28px; height: 28px; align-self: center; margin-bottom: 30px; border-radius: 50%; border: 1px solid var(--a-line); color: var(--a-mute); display: flex; align-items: center; justify-content: center; font-size: 16px; }
   .sub2 { color: var(--a-mute); font-size: 11.5px; margin-top: 2px; }
-  .behind { font-size: 12px; color: var(--a-mute); }
   .lv { font-family: var(--mono); font-size: 14px; font-weight: 600; margin-left: 6px; }
   .ld { font-family: var(--mono); font-size: 11.5px; color: var(--a-mute); }
   .chartwrap { position: relative; margin-top: 14px; }
   .peak { position: absolute; left: 0; top: -12px; font-family: var(--mono); font-size: 10.5px; color: var(--a-mute); }
   .ticks { display: flex; justify-content: space-between; font-family: var(--mono); font-size: 10.5px; color: var(--a-mute); margin-top: 6px; }
   .svc2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 10px; }
-  .term.tall { white-space: pre; overflow: hidden; min-height: 168px; border-radius: 9px 9px 0 0; }
-  .term .ok { color: var(--a-green); } .term .cwd { color: #6fa0ff; }
-  .grip { height: 10px; background: #0f0f11; border: 1px solid var(--a-line); border-top: none; border-radius: 0 0 9px 9px; position: relative; }
-  .grip::after { content: ""; position: absolute; left: 50%; top: 4px; width: 36px; height: 2px; margin-left: -18px; border-radius: 1px; background: #3a3a40; }
   .btn.pri { background: #2563eb; border-color: #2563eb; }
   .pop-hd2 { padding: 2px 6px 12px; }
   .attn { font-size: 18px; font-weight: 650; color: var(--a-yellow); }
@@ -255,17 +247,17 @@ machines:
 <p>Two views over the same data: a compact menu bar popover for a glance, and a full window for everything else. Dark, with dot-matrix charts and meters, monospace numbers, and colour only where it means something.</p>
 
 <h3>Full window</h3>
-<p>The machine strip sits at the top, with each machine's service icons under it, one click to open. Selecting a machine switches the panel below.</p>
+<p>The machine strip sits at the top. Selecting a machine switches the panel below, which holds its health, its services (one click to open) and its sync controls.</p>
 <div class="app win">
   <div class="titlebar">
     <div class="lights"><span style="background:#ff5f57"></span><span style="background:#febc2e"></span><span style="background:#28c840"></span></div>
     <div class="tools2"><span class="upd">Updated 8s ago</span><span class="ib" title="Refresh">↻</span><span class="ib" title="Settings">⚙</span></div>
   </div>
   <div class="strip">
-    <div class="m"><svg viewBox="0 0 80 44"><rect x="14" y="4" width="52" height="32" rx="3" fill="#2b2b30" stroke="#5a5a62"/><rect x="18" y="8" width="44" height="24" rx="1.5" fill="#3d6fd8"/><rect x="6" y="36" width="68" height="4" rx="2" fill="#5a5a62"/></svg><div class="nm"><span class="dot" style="background:var(--a-green)"></span>richard-m4-max</div><div class="st">in sync</div><div class="svcrow"></div></div>
-    <div class="m sel"><svg viewBox="0 0 80 44"><rect x="14" y="4" width="52" height="32" rx="3" fill="#2b2b30" stroke="#8a8a92"/><rect x="18" y="8" width="44" height="24" rx="1.5" fill="#1a1a1d"/><text x="22" y="18" font-family="monospace" font-size="6" fill="#5ad18a">$ _</text><rect x="6" y="36" width="68" height="4" rx="2" fill="#8a8a92"/></svg><div class="nm"><span class="dot" style="background:var(--a-yellow)"></span>richard-hp-server</div><div class="st" style="color:var(--a-yellow)">↓4 behind</div><div class="svcrow"><span class="si" style="background:linear-gradient(135deg,#aa5cc3,#00a4dc)" title="Jellyfin">J</span><span class="si" style="background:#5b4bdb" title="Jellyseerr">S</span></div></div>
-    <div class="m"><svg viewBox="0 0 80 44"><rect x="22" y="8" width="36" height="28" rx="3" fill="#2b2b30" stroke="#5a5a62"/><circle cx="32" cy="18" r="2" fill="#5ad18a"/><rect x="28" y="26" width="24" height="3" rx="1.5" fill="#5a5a62"/></svg><div class="nm"><span class="dot" style="background:#8d8d94"></span>homeassistant</div><div class="st">no agent</div><div class="svcrow"><span class="si" style="background:#18bcf2" title="Home Assistant">⌂</span></div></div>
-    <div class="m"><svg viewBox="0 0 80 44"><rect x="31" y="3" width="18" height="36" rx="4" fill="#2b2b30" stroke="#5a5a62"/><rect x="36" y="5" width="8" height="2" rx="1" fill="#5a5a62"/></svg><div class="nm"><span class="dot hollow"></span>iphone-15-pro-max</div><div class="st">offline · 2h</div><div class="svcrow"></div></div>
+    <div class="m"><svg viewBox="0 0 80 44"><rect x="14" y="4" width="52" height="32" rx="3" fill="#2b2b30" stroke="#5a5a62"/><rect x="18" y="8" width="44" height="24" rx="1.5" fill="#3d6fd8"/><rect x="6" y="36" width="68" height="4" rx="2" fill="#5a5a62"/></svg><div class="nm"><span class="dot" style="background:var(--a-green)"></span>richard-m4-max</div><div class="st">in sync</div></div>
+    <div class="m sel"><svg viewBox="0 0 80 44"><rect x="14" y="4" width="52" height="32" rx="3" fill="#2b2b30" stroke="#8a8a92"/><rect x="18" y="8" width="44" height="24" rx="1.5" fill="#1a1a1d"/><text x="22" y="18" font-family="monospace" font-size="6" fill="#5ad18a">$ _</text><rect x="6" y="36" width="68" height="4" rx="2" fill="#8a8a92"/></svg><div class="nm"><span class="dot" style="background:var(--a-yellow)"></span>richard-hp-server</div><div class="st" style="color:var(--a-yellow)">↓4</div></div>
+    <div class="m"><svg viewBox="0 0 80 44"><rect x="22" y="8" width="36" height="28" rx="3" fill="#2b2b30" stroke="#5a5a62"/><circle cx="32" cy="18" r="2" fill="#5ad18a"/><rect x="28" y="26" width="24" height="3" rx="1.5" fill="#5a5a62"/></svg><div class="nm"><span class="dot" style="background:#8d8d94"></span>homeassistant</div><div class="st">no agent</div></div>
+    <div class="m"><svg viewBox="0 0 80 44"><rect x="31" y="3" width="18" height="36" rx="4" fill="#2b2b30" stroke="#5a5a62"/><rect x="36" y="5" width="8" height="2" rx="1" fill="#5a5a62"/></svg><div class="nm"><span class="dot hollow"></span>iphone-15-pro-max</div><div class="st">offline · 2h</div></div>
     <div class="addm2" title="Add machine">+</div>
   </div>
 
@@ -277,9 +269,9 @@ machines:
         <div class="sub2">Debian 13 · Home Manager · up 12d</div>
       </div>
       <div class="sync">
-        <div><span class="big bh">↓4</span> <span class="behind">behind main</span></div>
+        <div><span class="big bh">↓4</span></div>
         <div class="rev">Last sync 2d ago · succeeded</div>
-        <div class="btns"><span class="btn">Changes</span><span class="btn pri">Sync ↓4</span><span class="btn" title="More: Roll back, Pull only">⋯</span></div>
+        <div class="btns"><span class="btn">Changes</span><span class="btn">Terminal</span><span class="btn pri">Sync ↓4</span><span class="btn" title="More: Roll back, Pull only">⋯</span></div>
       </div>
     </div>
 
@@ -303,21 +295,9 @@ machines:
       </div>
     </div>
 
-    <div class="sec">
-      <div class="sec-h"><b>Terminal</b><span class="btn">Pop out</span></div>
-      <div class="term tall"><span class="p">richard@richard-hp-server</span> <span class="cwd">~</span> $ systemctl status jellyfin --no-pager | head -4
-<span class="ok">●</span> jellyfin.service - Jellyfin Media Server
-     Loaded: loaded (/etc/systemd/system/jellyfin.service; enabled)
-     Active: <span class="ok">active (running)</span> since Mon 2026-11-14 08:12:03 CET; 12 days ago
-   Main PID: 1843 (jellyfin)
-<span class="p">richard@richard-hp-server</span> <span class="cwd">~</span> $ df -h /mnt/media | tail -1
-/dev/sda1       1.8T  1.4T  401G  78% /mnt/media
-<span class="p">richard@richard-hp-server</span> <span class="cwd">~</span> $ <span class="cur"></span></div>
-      <div class="grip"></div>
-    </div>
   </div>
 </div>
-<p class="note">Healthy meters are neutral. A meter turns amber past 85% and red past 95% (temperature: 80°C and 90°C). Green means charging, nothing else. The commit list and generation details live behind <b>Changes</b>; Roll back is in the <b>⋯</b> menu.</p>
+<p class="note">Healthy meters are neutral. A meter turns amber past 85% and red past 95% (temperature: 80°C and 90°C). Green means charging, nothing else. The commit list and generation details live behind <b>Changes</b>; Roll back is in the <b>⋯</b> menu. <b>Terminal</b> opens a shell on the machine in a drawer at the bottom of the window, and a sync opens it automatically while it runs if you want to watch. Service icons sit in the panel and the popover, not in the strip.</p>
 
 <h3>Menu bar popover</h3>
 <div class="twocol">
