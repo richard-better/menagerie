@@ -12,7 +12,9 @@
 //! piling up in memory, and each UI turn takes a capped amount of it.
 
 use std::io::{Read, Write};
-use std::sync::mpsc::Sender;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc::SyncSender;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use futures::{SinkExt, StreamExt};
@@ -58,6 +60,7 @@ pub struct Run {
 }
 
 impl Run {
+    #[cfg(test)]
     fn text(&self) -> String {
         self.glyphs.iter().map(|g| g.text.as_str()).collect()
     }
@@ -220,31 +223,140 @@ pub fn key_bytes(
 /// paste isn't run line by line.
 pub fn paste_bytes(text: &str, bracketed: bool) -> Vec<u8> {
     if bracketed {
-        // A paste can't end the bracket early.
-        let text = text.replace("\x1b[201~", "");
+        // No ESC at all inside the bracket, so no terminator can be put
+        // together from the pasted bytes and end it early.
+        let text = text.replace('\x1b', "");
         [b"\x1b[200~".as_slice(), text.as_bytes(), b"\x1b[201~"].concat()
     } else {
         text.as_bytes().to_vec()
     }
 }
 
+/// Writes queued for the PTY at most. Past this the program isn't reading
+/// its input, so more is dropped rather than held in memory.
+const WRITES: usize = 256;
+/// How long a closed shell gets to exit on SIGHUP before it is killed.
+const CLOSE_GRACE: Duration = Duration::from_secs(1);
+
+/// The shell's process. Closing it signals from its own thread, and one
+/// reaper thread collects its exit, so nothing here waits on the UI thread.
+#[derive(Clone)]
+struct Process {
+    pid: Option<u32>,
+    killer: Arc<Mutex<Box<dyn ChildKiller + Send + Sync>>>,
+    reaped: Arc<AtomicBool>,
+}
+
+impl Process {
+    /// SIGHUP, as closing a terminal sends, then SIGKILL to the shell's
+    /// process group if it is still running after a grace period. The PID is
+    /// only signalled while unreaped, so it can't be someone else's.
+    fn close(&self) {
+        let this = self.clone();
+        std::thread::spawn(move || {
+            if this.reaped.load(Ordering::SeqCst) {
+                return;
+            }
+            let _ = this.killer.lock().map(|mut k| k.kill());
+            std::thread::sleep(CLOSE_GRACE);
+            if let Some(pid) = this.pid
+                && !this.reaped.load(Ordering::SeqCst)
+            {
+                // The shell leads its own session and process group on the PTY.
+                let _ = std::process::Command::new("kill")
+                    .args(["-KILL", "--", &format!("-{pid}")])
+                    .status();
+            }
+        });
+    }
+}
+
+/// What the setup worker hands back once the shell is running.
+struct Spawned {
+    master: Box<dyn MasterPty + Send>,
+    reader: Box<dyn Read + Send>,
+    writer: Box<dyn Write + Send>,
+    process: Process,
+}
+
+/// Open a PTY and start the shell on it. Runs on a worker thread.
+fn spawn_shell(place: Place, dir: Option<std::path::PathBuf>) -> Result<Spawned, String> {
+    let pty = native_pty_system()
+        .openpty(PtySize {
+            rows: ROWS,
+            cols: COLS,
+            pixel_width: 0,
+            pixel_height: 0,
+        })
+        .map_err(|e| e.to_string())?;
+    let mut command = match &place {
+        Place::Here => {
+            let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/zsh".to_owned());
+            let mut c = CommandBuilder::new(shell);
+            c.arg("-l");
+            if let Some(dir) = dir.filter(|d| d.is_dir()) {
+                c.cwd(dir);
+            } else if let Some(home) = std::env::var_os("HOME") {
+                c.cwd(home);
+            }
+            c
+        }
+        Place::Ssh(to) => {
+            let mut c = CommandBuilder::new("ssh");
+            c.args(["-t", "--", to]);
+            c
+        }
+    };
+    command.env("TERM", "xterm-256color");
+    command.env("COLORTERM", "truecolor");
+    let mut child = pty
+        .slave
+        .spawn_command(command)
+        .map_err(|e| e.to_string())?;
+    // The child holds its own copy; the parent's must close so EOF arrives.
+    drop(pty.slave);
+    let process = Process {
+        pid: child.process_id(),
+        killer: Arc::new(Mutex::new(child.clone_killer())),
+        reaped: Arc::new(AtomicBool::new(false)),
+    };
+    let reaped = process.reaped.clone();
+    std::thread::spawn(move || {
+        let _ = child.wait();
+        reaped.store(true, Ordering::SeqCst);
+    });
+    let started = (|| {
+        let reader = pty.master.try_clone_reader().map_err(|e| e.to_string())?;
+        let writer = pty.master.take_writer().map_err(|e| e.to_string())?;
+        Ok::<_, String>((reader, writer))
+    })();
+    match started {
+        Ok((reader, writer)) => Ok(Spawned {
+            master: pty.master,
+            reader,
+            writer,
+            process,
+        }),
+        Err(e) => {
+            // Partly started: the shell mustn't outlive the failure.
+            process.close();
+            Err(e)
+        }
+    }
+}
+
 /// The live half of a terminal: the PTY and the process on it.
 struct Session {
     /// Bytes for the PTY, written by the writer thread.
-    input: Sender<Vec<u8>>,
-    killer: Box<dyn ChildKiller + Send + Sync>,
+    input: SyncSender<Vec<u8>>,
+    process: Process,
     _master: Box<dyn MasterPty + Send>,
     _reader: Task<()>,
 }
 
 impl Drop for Session {
     fn drop(&mut self) {
-        // portable-pty's kill can sleep, so it runs off the UI thread; the
-        // reaper thread collects the exit.
-        let mut killer = self.killer.clone_killer();
-        std::thread::spawn(move || {
-            let _ = killer.kill();
-        });
+        self.process.close();
     }
 }
 
@@ -255,85 +367,65 @@ pub struct TerminalView {
     cursor: Option<(u16, u16)>,
     session: Option<Session>,
     focus: FocusHandle,
+    starting: bool,
     exited: bool,
     error: Option<String>,
+    _start: Task<()>,
 }
 
 impl TerminalView {
     /// Start a login shell here (in `dir`), or an SSH session to `place`.
-    /// A failure to start shows in the view instead.
+    /// Setup happens on a worker; a failure shows in the view.
     pub fn new(place: &Place, dir: Option<std::path::PathBuf>, cx: &mut Context<Self>) -> Self {
-        let focus = cx.focus_handle();
-        match Self::start(place, dir, cx) {
-            Ok((screen, session)) => Self {
-                screen: Some(screen),
-                lines: Vec::new(),
-                cursor: None,
-                session: Some(session),
-                focus,
-                exited: false,
-                error: None,
-            },
-            Err(error) => Self {
-                screen: None,
-                lines: Vec::new(),
-                cursor: None,
-                session: None,
-                focus,
-                exited: true,
-                error: Some(error),
-            },
+        let place = place.clone();
+        let start = cx.spawn(async move |this, cx| {
+            let spawned = cx
+                .background_executor()
+                .spawn(async move { spawn_shell(place, dir) })
+                .await;
+            let mut spawned = Some(spawned);
+            let attached = this.update(cx, |view, cx| {
+                view.starting = false;
+                match spawned.take() {
+                    Some(Ok(s)) => view.attach(s, cx),
+                    Some(Err(e)) => {
+                        view.error = Some(e);
+                        view.exited = true;
+                    }
+                    None => {}
+                }
+                cx.notify();
+            });
+            // Closed while it was starting: end what was started.
+            if attached.is_err()
+                && let Some(Ok(s)) = spawned
+            {
+                s.process.close();
+            }
+        });
+        Self {
+            screen: None,
+            lines: Vec::new(),
+            cursor: None,
+            session: None,
+            focus: cx.focus_handle(),
+            starting: true,
+            exited: false,
+            error: None,
+            _start: start,
         }
     }
 
-    fn start(
-        place: &Place,
-        dir: Option<std::path::PathBuf>,
-        cx: &mut Context<Self>,
-    ) -> Result<(Screen, Session), String> {
-        let pty = native_pty_system()
-            .openpty(PtySize {
-                rows: ROWS,
-                cols: COLS,
-                pixel_width: 0,
-                pixel_height: 0,
-            })
-            .map_err(|e| e.to_string())?;
-        let mut command = match place {
-            Place::Here => {
-                let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/zsh".to_owned());
-                let mut c = CommandBuilder::new(shell);
-                c.arg("-l");
-                if let Some(dir) = dir.filter(|d| d.is_dir()) {
-                    c.cwd(dir);
-                } else if let Some(home) = std::env::var_os("HOME") {
-                    c.cwd(home);
-                }
-                c
-            }
-            Place::Ssh(to) => {
-                let mut c = CommandBuilder::new("ssh");
-                c.args(["-t", "--", to]);
-                c
-            }
-        };
-        command.env("TERM", "xterm-256color");
-        command.env("COLORTERM", "truecolor");
-        let mut child = pty
-            .slave
-            .spawn_command(command)
-            .map_err(|e| e.to_string())?;
-        // The child holds its own copy; the parent's must close so EOF arrives.
-        drop(pty.slave);
-        let killer = child.clone_killer();
-        // Reaps the child whenever it exits, by itself or killed.
-        std::thread::spawn(move || {
-            let _ = child.wait();
-        });
-
-        let mut reader = pty.master.try_clone_reader().map_err(|e| e.to_string())?;
-        let mut writer = pty.master.take_writer().map_err(|e| e.to_string())?;
-        let (input, keys) = std::sync::mpsc::channel::<Vec<u8>>();
+    /// Wire a running shell to the screen. On the UI thread, where the
+    /// libghostty-vt handles live.
+    fn attach(&mut self, spawned: Spawned, cx: &mut Context<Self>) {
+        let Spawned {
+            master,
+            mut reader,
+            mut writer,
+            process,
+        } = spawned;
+        let (input, keys) = std::sync::mpsc::sync_channel::<Vec<u8>>(WRITES);
         std::thread::spawn(move || {
             for bytes in keys {
                 if writer
@@ -345,11 +437,18 @@ impl TerminalView {
                 }
             }
         });
-
         let replies = input.clone();
-        let screen = Screen::new(COLS, ROWS, move |data| {
-            let _ = replies.send(data.to_vec());
-        })?;
+        let screen = match Screen::new(COLS, ROWS, move |data| {
+            let _ = replies.try_send(data.to_vec());
+        }) {
+            Ok(screen) => screen,
+            Err(e) => {
+                process.close();
+                self.error = Some(e);
+                self.exited = true;
+                return;
+            }
+        };
 
         let (mut tx, mut rx) = futures::channel::mpsc::channel::<Vec<u8>>(QUEUE);
         std::thread::spawn(move || {
@@ -367,23 +466,28 @@ impl TerminalView {
             }
         });
         let reader_task = cx.spawn(async move |this, cx| {
+            // Chunks handled since the UI last got a turn, across batches.
+            let mut since_yield = 0;
             while let Some(mut chunk) = rx.next().await {
-                let mut taken = 1;
-                while taken < PER_TURN {
+                since_yield += 1;
+                while since_yield < PER_TURN {
                     match rx.try_recv() {
-                        Ok(more) => chunk.extend_from_slice(&more),
+                        Ok(more) => {
+                            chunk.extend_from_slice(&more);
+                            since_yield += 1;
+                        }
                         Err(_) => break,
                     }
-                    taken += 1;
                 }
                 if this.update(cx, |view, cx| view.feed(&chunk, cx)).is_err() {
                     return;
                 }
-                if taken == PER_TURN {
-                    // Still flooding: let a frame and input through.
+                if since_yield >= PER_TURN {
+                    // Flooding: let a frame and input through.
                     cx.background_executor()
                         .timer(Duration::from_millis(8))
                         .await;
+                    since_yield = 0;
                 }
             }
             let _ = this.update(cx, |view, cx| {
@@ -392,15 +496,13 @@ impl TerminalView {
             });
         });
 
-        Ok((
-            screen,
-            Session {
-                input,
-                killer,
-                _master: pty.master,
-                _reader: reader_task,
-            },
-        ))
+        self.screen = Some(screen);
+        self.session = Some(Session {
+            input,
+            process,
+            _master: master,
+            _reader: reader_task,
+        });
     }
 
     fn feed(&mut self, bytes: &[u8], cx: &mut Context<Self>) {
@@ -415,7 +517,8 @@ impl TerminalView {
 
     fn send(&mut self, bytes: Vec<u8>) {
         if let Some(session) = self.session.as_ref().filter(|_| !self.exited) {
-            let _ = session.input.send(bytes);
+            // Full means the program isn't reading; dropping beats queueing.
+            let _ = session.input.try_send(bytes);
         }
     }
 
@@ -478,26 +581,29 @@ impl Render for TerminalView {
                     }
                     span
                 };
-                // The cursor is placed by grid column, so wide and combining
-                // characters don't shift it.
-                let at = cursor
-                    .filter(|&(_, cy)| cy as usize == y)
-                    .and_then(|(cx, _)| {
-                        run.glyphs
-                            .iter()
-                            .position(|g| cx >= g.col && cx < g.col + g.width)
-                    });
-                match at {
-                    Some(i) => {
-                        let part = |glyphs: &[Glyph]| -> String {
-                            glyphs.iter().map(|g| g.text.as_str()).collect()
-                        };
-                        row = row
-                            .child(style(part(&run.glyphs[..i]), false))
-                            .child(style(run.glyphs[i].text.clone(), true))
-                            .child(style(part(&run.glyphs[i + 1..]), false));
+                // Cells, not shaped text widths, decide where things go: a
+                // wide glyph gets exactly two cells whatever its fallback
+                // font measures, and the cursor is found by grid column.
+                let cursor_col = cursor.filter(|&(_, cy)| cy as usize == y).map(|(cx, _)| cx);
+                let mut narrow = String::new();
+                for glyph in &run.glyphs {
+                    let under = cursor_col
+                        .is_some_and(|cx| cx >= glyph.col && cx < glyph.col + glyph.width);
+                    if glyph.width == 1 && !under {
+                        narrow.push_str(&glyph.text);
+                        continue;
                     }
-                    None => row = row.child(style(run.text(), false)),
+                    if !narrow.is_empty() {
+                        row = row.child(style(std::mem::take(&mut narrow), false));
+                    }
+                    row = row.child(
+                        style(glyph.text.clone(), under)
+                            .w(px(CELL_WIDTH * glyph.width as f32))
+                            .overflow_hidden(),
+                    );
+                }
+                if !narrow.is_empty() {
+                    row = row.child(style(narrow, false));
                 }
             }
             row
@@ -528,6 +634,17 @@ impl Render for TerminalView {
                     .line_height(px(LINE_HEIGHT))
                     .children(rows),
             )
+            .when(self.starting, |el| {
+                el.child(
+                    div()
+                        .px(px(10.))
+                        .pb(px(8.))
+                        .font_family(theme::MONO)
+                        .text_size(px(FONT_SIZE))
+                        .text_color(theme::mute())
+                        .child("Starting…"),
+                )
+            })
             .when(self.exited, |el| {
                 el.child(
                     div()
@@ -593,8 +710,12 @@ mod tests {
         assert_eq!(paste_bytes("a\nb", true), b"\x1b[200~a\nb\x1b[201~");
         assert_eq!(
             paste_bytes("x\x1b[201~rm -rf", true),
-            b"\x1b[200~xrm -rf\x1b[201~"
+            b"\x1b[200~x[201~rm -rf\x1b[201~"
         );
+        // Removing one terminator mustn't leave the pieces of another.
+        let tricky = paste_bytes("\x1b[20\x1b[201~1~ls", true);
+        let inner = &tricky[6..tricky.len() - 6];
+        assert!(!inner.contains(&0x1b), "{inner:?}");
     }
 
     #[test]
@@ -680,6 +801,44 @@ mod tests {
             }
         }
         panic!("never saw the reply: {:?}", text(&mut screen));
+    }
+
+    /// A shell that ignores SIGHUP is still gone soon after it is closed.
+    #[test]
+    fn closing_kills_a_shell_that_ignores_hangup() {
+        let pty = native_pty_system()
+            .openpty(PtySize {
+                rows: 5,
+                cols: 40,
+                pixel_width: 0,
+                pixel_height: 0,
+            })
+            .unwrap();
+        let mut command = CommandBuilder::new("/bin/sh");
+        command.args(["-c", "trap '' HUP; sleep 30"]);
+        let mut child = pty.slave.spawn_command(command).unwrap();
+        drop(pty.slave);
+        let process = Process {
+            pid: child.process_id(),
+            killer: Arc::new(Mutex::new(child.clone_killer())),
+            reaped: Arc::new(AtomicBool::new(false)),
+        };
+        let reaped = process.reaped.clone();
+        std::thread::spawn(move || {
+            let _ = child.wait();
+            reaped.store(true, Ordering::SeqCst);
+        });
+        std::thread::sleep(Duration::from_millis(200));
+        let started = std::time::Instant::now();
+        process.close();
+        while !process.reaped.load(Ordering::SeqCst) {
+            assert!(
+                started.elapsed() < CLOSE_GRACE * 4,
+                "the shell outlived closing"
+            );
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        drop(pty.master);
     }
 
     #[test]
