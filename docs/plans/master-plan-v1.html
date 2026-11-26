@@ -105,6 +105,36 @@
   .pop-ft { display: flex; gap: 6px; margin-top: 8px; padding-top: 10px; border-top: 1px solid var(--a-line); }
   .pop-ft .btn { flex: 1; text-align: center; }
   .twocol { display: grid; grid-template-columns: 340px 1fr; gap: 24px; align-items: start; }
+  /* v2 mockup refinements */
+  .tools2 { display: flex; align-items: center; gap: 6px; }
+  .tools2 .upd { font-size: 11.5px; color: var(--a-mute); margin-right: 4px; }
+  .ib { width: 26px; height: 26px; border-radius: 7px; background: var(--a-raise); border: 1px solid var(--a-line); color: var(--a-mute); display: inline-flex; align-items: center; justify-content: center; font-size: 13px; }
+  .dot.hollow { background: transparent; border: 1.5px solid #8d8d94; width: 5px; height: 5px; }
+  .addm2 { flex: 0 0 28px; height: 28px; align-self: center; margin-bottom: 30px; border-radius: 50%; border: 1px solid var(--a-line); color: var(--a-mute); display: flex; align-items: center; justify-content: center; font-size: 16px; }
+  .sub2 { color: var(--a-mute); font-size: 11.5px; margin-top: 2px; }
+  .behind { font-size: 12px; color: var(--a-mute); }
+  .lv { font-family: var(--mono); font-size: 14px; font-weight: 600; margin-left: 6px; }
+  .ld { font-family: var(--mono); font-size: 11.5px; color: var(--a-mute); }
+  .chartwrap { position: relative; margin-top: 14px; }
+  .peak { position: absolute; left: 0; top: -12px; font-family: var(--mono); font-size: 10.5px; color: var(--a-mute); }
+  .ticks { display: flex; justify-content: space-between; font-family: var(--mono); font-size: 10.5px; color: var(--a-mute); margin-top: 6px; }
+  .svc2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 10px; }
+  .term.tall { white-space: pre; overflow: hidden; min-height: 168px; border-radius: 9px 9px 0 0; }
+  .term .ok { color: var(--a-green); } .term .cwd { color: #6fa0ff; }
+  .grip { height: 10px; background: #0f0f11; border: 1px solid var(--a-line); border-top: none; border-radius: 0 0 9px 9px; position: relative; }
+  .grip::after { content: ""; position: absolute; left: 50%; top: 4px; width: 36px; height: 2px; margin-left: -18px; border-radius: 1px; background: #3a3a40; }
+  .btn.pri { background: #2563eb; border-color: #2563eb; }
+  .pop-hd2 { padding: 2px 6px 12px; }
+  .attn { font-size: 18px; font-weight: 650; color: var(--a-yellow); }
+  .cen { font-size: 11.5px; color: var(--a-mute); margin-top: 2px; }
+  .row-m2 { display: grid; grid-template-columns: 30px 1fr auto; gap: 4px 10px; align-items: center; padding: 9px 8px; border-radius: 9px; }
+  .row-m2 svg { width: 30px; height: 22px; }
+  .row-m2 .n { font-size: 13px; font-weight: 600; }
+  .row-m2 .n.dim { color: var(--a-mute); }
+  .row-m2 .d { font-size: 11.5px; color: var(--a-mute); margin-top: 2px; padding-left: 12px; }
+  .row-m2 .icons { grid-column: 2 / 4; display: flex; gap: 5px; margin-top: 4px; padding-left: 12px; }
+  .stt { font-size: 11.5px; color: var(--a-mute); }
+  .syncbtn { font-family: var(--mono); font-size: 11.5px; font-weight: 600; color: #18181a; background: var(--a-yellow); padding: 3px 9px; border-radius: 7px; }
   @media (max-width: 720px) {
     .twocol, .grid2 { grid-template-columns: 1fr; }
     .svc { grid-template-columns: 1fr 1fr; }
@@ -229,112 +259,103 @@ machines:
 <div class="app win">
   <div class="titlebar">
     <div class="lights"><span style="background:#ff5f57"></span><span style="background:#febc2e"></span><span style="background:#28c840"></span></div>
-    <div class="tools"><span>⟳ 8s</span><span>History</span><span>⚙</span></div>
+    <div class="tools2"><span class="upd">Updated 8s ago</span><span class="ib" title="Refresh">↻</span><span class="ib" title="Settings">⚙</span></div>
   </div>
   <div class="strip">
-    <div class="m">
-      <svg viewBox="0 0 80 44"><rect x="14" y="4" width="52" height="32" rx="3" fill="#2b2b30" stroke="#5a5a62"/><rect x="18" y="8" width="44" height="24" rx="1.5" fill="#3d6fd8"/><rect x="6" y="36" width="68" height="4" rx="2" fill="#5a5a62"/></svg>
-      <div class="nm"><span class="dot" style="background:var(--a-green)"></span>richard-m4-max</div>
-      <div class="st">in sync · 58%</div>
-      <div class="svcrow"></div>
-    </div>
-    <div class="m sel">
-      <svg viewBox="0 0 80 44"><rect x="14" y="4" width="52" height="32" rx="3" fill="#2b2b30" stroke="#8a8a92"/><rect x="18" y="8" width="44" height="24" rx="1.5" fill="#1a1a1d"/><text x="22" y="18" font-family="monospace" font-size="6" fill="#5ad18a">$ _</text><rect x="6" y="36" width="68" height="4" rx="2" fill="#8a8a92"/></svg>
-      <div class="nm"><span class="dot" style="background:var(--a-yellow)"></span>richard-hp-server</div>
-      <div class="st" style="color:var(--a-yellow)">↓4 · ⚡87%</div>
-      <div class="svcrow"><span class="si" style="background:linear-gradient(135deg,#aa5cc3,#00a4dc)" title="Jellyfin">J</span><span class="si" style="background:#5b4bdb" title="Jellyseerr">S</span></div>
-    </div>
-    <div class="m">
-      <svg viewBox="0 0 80 44"><rect x="22" y="8" width="36" height="28" rx="3" fill="#2b2b30" stroke="#5a5a62"/><circle cx="32" cy="18" r="2" fill="#5ad18a"/><rect x="28" y="26" width="24" height="3" rx="1.5" fill="#5a5a62"/></svg>
-      <div class="nm"><span class="dot" style="background:var(--a-green)"></span>homeassistant</div>
-      <div class="st">no agent</div>
-      <div class="svcrow"><span class="si" style="background:#18bcf2" title="Home Assistant">⌂</span></div>
-    </div>
-    <div class="m">
-      <svg viewBox="0 0 80 44"><rect x="31" y="3" width="18" height="36" rx="4" fill="#2b2b30" stroke="#5a5a62"/><rect x="36" y="5" width="8" height="2" rx="1" fill="#5a5a62"/></svg>
-      <div class="nm"><span class="dot" style="background:transparent;border:1.5px solid var(--a-faint);width:5px;height:5px"></span>iphone-15-pro-max</div>
-      <div class="st">seen 2h ago</div>
-      <div class="svcrow"></div>
-    </div>
-    <div class="addm">+</div>
+    <div class="m"><svg viewBox="0 0 80 44"><rect x="14" y="4" width="52" height="32" rx="3" fill="#2b2b30" stroke="#5a5a62"/><rect x="18" y="8" width="44" height="24" rx="1.5" fill="#3d6fd8"/><rect x="6" y="36" width="68" height="4" rx="2" fill="#5a5a62"/></svg><div class="nm"><span class="dot" style="background:var(--a-green)"></span>richard-m4-max</div><div class="st">in sync</div><div class="svcrow"></div></div>
+    <div class="m sel"><svg viewBox="0 0 80 44"><rect x="14" y="4" width="52" height="32" rx="3" fill="#2b2b30" stroke="#8a8a92"/><rect x="18" y="8" width="44" height="24" rx="1.5" fill="#1a1a1d"/><text x="22" y="18" font-family="monospace" font-size="6" fill="#5ad18a">$ _</text><rect x="6" y="36" width="68" height="4" rx="2" fill="#8a8a92"/></svg><div class="nm"><span class="dot" style="background:var(--a-yellow)"></span>richard-hp-server</div><div class="st" style="color:var(--a-yellow)">↓4 behind</div><div class="svcrow"><span class="si" style="background:linear-gradient(135deg,#aa5cc3,#00a4dc)" title="Jellyfin">J</span><span class="si" style="background:#5b4bdb" title="Jellyseerr">S</span></div></div>
+    <div class="m"><svg viewBox="0 0 80 44"><rect x="22" y="8" width="36" height="28" rx="3" fill="#2b2b30" stroke="#5a5a62"/><circle cx="32" cy="18" r="2" fill="#5ad18a"/><rect x="28" y="26" width="24" height="3" rx="1.5" fill="#5a5a62"/></svg><div class="nm"><span class="dot" style="background:#8d8d94"></span>homeassistant</div><div class="st">no agent</div><div class="svcrow"><span class="si" style="background:#18bcf2" title="Home Assistant">⌂</span></div></div>
+    <div class="m"><svg viewBox="0 0 80 44"><rect x="31" y="3" width="18" height="36" rx="4" fill="#2b2b30" stroke="#5a5a62"/><rect x="36" y="5" width="8" height="2" rx="1" fill="#5a5a62"/></svg><div class="nm"><span class="dot hollow"></span>iphone-15-pro-max</div><div class="st">offline · 2h</div><div class="svcrow"></div></div>
+    <div class="addm2" title="Add machine">+</div>
   </div>
 
   <div class="panel">
     <div class="hd">
       <div>
         <h4>richard-hp-server</h4>
-        <div class="sub">Media server · exit node · Debian 13 + Home Manager · up 12d 4h</div>
+        <div class="sub">Media server · exit node</div>
+        <div class="sub2">Debian 13 · Home Manager · up 12d</div>
       </div>
       <div class="sync">
-        <div class="big"><span class="ah">↑0</span> <span class="bh">↓4</span></div>
-        <div class="rev">gen 412 · 9f8e7d1 → a1b2c3d</div>
-        <div class="btns"><span class="btn">Changes</span><span class="btn">Roll back</span><span class="btn pri">Sync</span></div>
+        <div><span class="big bh">↓4</span> <span class="behind">behind main</span></div>
+        <div class="rev">Last sync 2d ago · succeeded</div>
+        <div class="btns"><span class="btn">Changes</span><span class="btn pri">Sync ↓4</span><span class="btn" title="More: Roll back, Pull only">⋯</span></div>
       </div>
     </div>
 
     <div class="sec">
-      <div class="sec-h"><b>Load</b><span class="seg"><span>1h</span><span class="on">24h</span><span>7d</span></span></div>
-      <svg id="loadchart" viewBox="0 0 680 92" style="width:100%;height:92px;display:block"></svg>
-      <div class="grid2" style="margin-top:14px">
-        <div class="meter"><div class="row"><span>Memory</span><span class="v">6.1 / 15 GiB</span></div><svg class="dm" data-pct="41" data-color="#a78bfa" viewBox="0 0 320 16" style="width:100%;height:16px"></svg><div class="foot"><span></span><span>41%</span></div></div>
-        <div class="meter"><div class="row"><span>Disk</span><span class="v">158 / 238 GB</span></div><svg class="dm" data-pct="66" data-color="#e9c548" viewBox="0 0 320 16" style="width:100%;height:16px"></svg><div class="foot"><span></span><span>66%</span></div></div>
-        <div class="meter"><div class="row"><span>Battery</span><span class="v" style="color:var(--a-green)">87% ⚡</span></div><svg class="dm" data-pct="87" data-color="#5ad18a" viewBox="0 0 320 16" style="width:100%;height:16px"></svg><div class="foot"><span>health 71%</span><span>412 cycles</span></div></div>
-        <div class="meter"><div class="row"><span>Temperature</span><span class="v">54°C</span></div><svg class="dm" data-pct="54" data-color="#e5734d" viewBox="0 0 320 16" style="width:100%;height:16px"></svg><div class="foot"><span></span><span>fan 2100 rpm</span></div></div>
+      <div class="sec-h"><span><b>Load</b> <span class="lv">0.4</span> <span class="ld">/ 4 cores</span></span><span class="seg"><span>1h</span><span class="on">24h</span><span>7d</span></span></div>
+      <div class="chartwrap"><svg id="loadchart" style="width:100%;height:44px;display:block"></svg><span class="peak">peak 3.1</span></div>
+      <div class="ticks"><span>00:00</span><span>06:00</span><span>12:00</span><span>18:00</span><span>now</span></div>
+      <div class="grid2" style="margin-top:16px">
+        <div class="meter"><div class="row"><span>Memory</span><span class="v">6.1 / 15 GB</span></div><svg class="dm" style="width:100%;height:16px;display:block" data-pct="41"></svg></div>
+        <div class="meter"><div class="row"><span>Disk</span><span class="v">158 / 238 GB</span></div><svg class="dm" style="width:100%;height:16px;display:block" data-pct="66"></svg></div>
+        <div class="meter"><div class="row"><span>Battery</span><span class="v">87% · <span style="color:var(--a-green)">charging</span></span></div><svg class="dm" style="width:100%;height:16px;display:block" data-pct="87" data-color="#5ad18a"></svg></div>
+        <div class="meter"><div class="row"><span>Temperature</span><span class="v">54°C</span></div><svg class="dm" style="width:100%;height:16px;display:block" data-pct="54"></svg></div>
       </div>
     </div>
 
     <div class="sec">
       <div class="sec-h"><b>Services</b></div>
-      <div class="svc">
-        <div class="tile"><div class="ico" style="background:linear-gradient(135deg,#aa5cc3,#00a4dc)">J</div><div><div class="t">Jellyfin ↗</div><div class="s"><span class="dot" style="background:var(--a-green)"></span>12 ms</div></div></div>
-        <div class="tile"><div class="ico" style="background:#5b4bdb">S</div><div><div class="t">Jellyseerr ↗</div><div class="s"><span class="dot" style="background:var(--a-green)"></span>31 ms</div></div></div>
+      <div class="svc2">
+        <div class="tile"><div class="ico" style="background:linear-gradient(135deg,#aa5cc3,#00a4dc)">J</div><div><div class="t">Jellyfin ↗</div><div class="s"><span class="dot" style="background:var(--a-green)"></span>up · 12 ms</div></div></div>
+        <div class="tile"><div class="ico" style="background:#5b4bdb">S</div><div><div class="t">Jellyseerr ↗</div><div class="s"><span class="dot" style="background:var(--a-green)"></span>up · 31 ms</div></div></div>
       </div>
     </div>
 
     <div class="sec">
       <div class="sec-h"><b>Terminal</b><span class="btn">Pop out</span></div>
-      <div class="term"><span class="p">richard@richard-hp-server</span> <span style="color:#4c8dff">~/dev/gh/richard-better/mac</span> $ <span class="cur"></span></div>
+      <div class="term tall"><span class="p">richard@richard-hp-server</span> <span class="cwd">~</span> $ systemctl status jellyfin --no-pager | head -4
+<span class="ok">●</span> jellyfin.service - Jellyfin Media Server
+     Loaded: loaded (/etc/systemd/system/jellyfin.service; enabled)
+     Active: <span class="ok">active (running)</span> since Mon 2026-11-14 08:12:03 CET; 12 days ago
+   Main PID: 1843 (jellyfin)
+<span class="p">richard@richard-hp-server</span> <span class="cwd">~</span> $ df -h /mnt/media | tail -1
+/dev/sda1       1.8T  1.4T  401G  78% /mnt/media
+<span class="p">richard@richard-hp-server</span> <span class="cwd">~</span> $ <span class="cur"></span></div>
+      <div class="grip"></div>
     </div>
   </div>
 </div>
-<p class="note">Removed from the earlier draft: the commit list (now behind <b>Changes</b>, in its own view) and the last-sync log (a sync streams into the terminal while it runs, and only its result is kept).</p>
+<p class="note">Healthy meters are neutral. A meter turns amber past 85% and red past 95% (temperature: 80°C and 90°C). Green means charging, nothing else. The commit list and generation details live behind <b>Changes</b>; Roll back is in the <b>⋯</b> menu.</p>
 
 <h3>Menu bar popover</h3>
 <div class="twocol">
   <div class="app">
-    <div class="bar-strip"><span>Wi-Fi</span><span class="me">◆ ↓4</span><span>20:31</span></div>
+    <div class="bar-strip"><span>Wi-Fi</span><span class="me">◆ 1</span><span>20:31</span></div>
     <div class="pop">
-      <div class="pop-hd"><div class="big" style="font-size:20px">3<span style="color:var(--a-mute);font-size:13px;font-weight:400;font-family:var(--sans)"> / 4 online</span></div><span style="font-size:11px;color:var(--a-mute)">⟳ 8s</span></div>
-      <div class="row-m">
+      <div class="pop-hd2"><div class="attn">1 needs sync</div><div class="cen">3 of 4 online · updated 8s ago</div></div>
+      <div class="row-m2">
         <svg viewBox="0 0 30 22"><rect x="5" y="2" width="20" height="14" rx="1.5" fill="#2b2b30" stroke="#5a5a62"/><rect x="7" y="4" width="16" height="10" fill="#3d6fd8"/><rect x="1" y="16" width="28" height="3" rx="1.5" fill="#5a5a62"/></svg>
-        <div><div class="n">richard-m4-max</div><div class="d">load 2.1 · 58% ⚡</div></div>
-        <span class="pill" style="color:var(--a-green)">✓</span>
+        <div><div class="n"><span class="dot" style="background:var(--a-green)"></span>richard-m4-max</div><div class="d">Workstation</div></div>
+        <span class="stt">in sync</span>
       </div>
-      <div class="row-m hl">
+      <div class="row-m2">
         <svg viewBox="0 0 30 22"><rect x="5" y="2" width="20" height="14" rx="1.5" fill="#2b2b30" stroke="#8a8a92"/><rect x="7" y="4" width="16" height="10" fill="#1a1a1d"/><rect x="1" y="16" width="28" height="3" rx="1.5" fill="#8a8a92"/></svg>
-        <div><div class="n">richard-hp-server</div><div class="d">load 0.4 · 87% ⚡</div></div>
-        <span class="pill" style="color:var(--a-yellow)">↓4 Sync</span>
-        <div class="icons"><span class="si" style="background:linear-gradient(135deg,#aa5cc3,#00a4dc)">J</span><span class="si" style="background:#5b4bdb">S</span></div>
+        <div><div class="n"><span class="dot" style="background:var(--a-yellow)"></span>richard-hp-server</div><div class="d">Media server</div></div>
+        <span class="syncbtn">Sync ↓4</span>
+        <div class="icons"><span class="si" style="background:linear-gradient(135deg,#aa5cc3,#00a4dc)" title="Jellyfin">J</span><span class="si" style="background:#5b4bdb" title="Jellyseerr">S</span></div>
       </div>
-      <div class="row-m">
-        <svg viewBox="0 0 30 22"><rect x="8" y="3" width="14" height="16" rx="2" fill="#2b2b30" stroke="#5a5a62"/><circle cx="12" cy="8" r="1.2" fill="#5ad18a"/></svg>
-        <div><div class="n">homeassistant</div><div class="d">online</div></div>
-        <span class="pill" style="color:var(--a-mute)">-</span>
-        <div class="icons"><span class="si" style="background:#18bcf2">⌂</span></div>
+      <div class="row-m2">
+        <svg viewBox="0 0 30 22"><rect x="7" y="4" width="16" height="14" rx="2" fill="#2b2b30" stroke="#5a5a62"/><circle cx="11" cy="8" r="1.2" fill="#5ad18a"/><rect x="10" y="12" width="10" height="1.6" rx=".8" fill="#5a5a62"/></svg>
+        <div><div class="n"><span class="dot" style="background:#8d8d94"></span>homeassistant</div><div class="d">Smart home</div></div>
+        <span class="stt">no agent</span>
+        <div class="icons"><span class="si" style="background:#18bcf2" title="Home Assistant">⌂</span></div>
       </div>
-      <div class="row-m" style="opacity:.5">
+      <div class="row-m2">
         <svg viewBox="0 0 30 22"><rect x="11" y="1" width="8" height="20" rx="2" fill="#2b2b30" stroke="#5a5a62"/></svg>
-        <div><div class="n">iphone-15-pro-max</div><div class="d">seen 2h ago</div></div>
-        <span class="pill" style="color:var(--a-mute)">off</span>
+        <div><div class="n dim"><span class="dot hollow"></span>iphone-15-pro-max</div><div class="d">seen 2h ago</div></div>
+        <span class="stt">offline</span>
       </div>
-      <div class="pop-ft"><span class="btn pri">Sync all (1)</span><span class="btn">Open window</span></div>
+      <div class="pop-ft"><span class="btn">Open Menagerie</span><span class="btn" style="flex:0 0 auto" title="Settings">⚙</span></div>
     </div>
   </div>
   <div>
     <ul>
-      <li><b>The menu bar icon</b> carries the state: plain when everything is in sync, a count when machines are behind, a spinner while syncing, red when a sync failed.</li>
-      <li><b>Service icons</b> sit under any machine that exposes services, in both views.</li>
-      <li><b>Sync all</b> runs in the background and sends a notification when done. Open the window to watch it.</li>
+      <li><b>The menu bar icon</b> carries the state: plain when everything is in sync, a count of machines that need attention, a spinner while syncing, red when a sync failed.</li>
+      <li><b>One status vocabulary</b> in both views: a dot before the name (green in sync, amber needs attention, grey no agent, hollow offline) and the same words after it.</li>
+      <li><b>No telemetry in the glance.</b> Load and battery appear here only when they are the reason for attention.</li>
+      <li><b>Sync all</b> appears in the footer only when two or more machines need it. It runs in the background and sends a notification when done.</li>
       <li>All numbers in these mockups are placeholders.</li>
     </ul>
   </div>
@@ -388,30 +409,28 @@ machines:
 
 </main>
 <script>
-  // Mockup charts. Seeded so the page renders the same every time.
+  // Mockup charts, sized to their rendered width. Seeded so the page renders the same every time.
   let seed = 7; const rnd = () => (seed = (seed * 16807) % 2147483647) / 2147483647;
   const NS = 'http://www.w3.org/2000/svg';
   const mk = (tag, attrs) => { const e = document.createElementNS(NS, tag); for (const k in attrs) e.setAttribute(k, attrs[k]); return e; };
   const lc = document.getElementById('loadchart');
-  const cols = 85, rows = 9, step = 8, base = 80;
+  const W = lc.clientWidth, H = 44, step = 6, rows = 7, cols = Math.floor(W / step);
+  lc.setAttribute('viewBox', `0 0 ${W} ${H}`);
   for (let c = 0; c < cols; c++) {
     const t = c / cols;
-    const v = 1.2 + 2.2 * Math.exp(-((t - .38) ** 2) / .004) + 3.6 * Math.exp(-((t - .62) ** 2) / .006) + 2.4 * Math.exp(-((t - .86) ** 2) / .003) + rnd() * .9;
-    for (let r = 0; r < Math.min(rows, Math.round(v)); r++) lc.appendChild(mk('circle', { cx: 4 + c * step, cy: base - r * step, r: 2.1, fill: '#e5734d', opacity: (0.55 + 0.45 * r / rows).toFixed(2) }));
+    const v = 0.8 + 1.8 * Math.exp(-((t - .38) ** 2) / .004) + 3.4 * Math.exp(-((t - .62) ** 2) / .006) + 2.2 * Math.exp(-((t - .86) ** 2) / .003) + rnd() * .8;
+    const last = c === cols - 1;
+    for (let r = 0; r < Math.min(rows, Math.max(1, Math.round(v))); r++)
+      lc.appendChild(mk('circle', { cx: 3 + c * step, cy: H - 4 - r * step, r: 1.8, fill: last ? '#f2f2f4' : '#c8c8ce', opacity: last ? 1 : (0.35 + 0.4 * r / rows).toFixed(2) }));
   }
-  lc.appendChild(mk('line', { x1: 0, x2: 680, y1: base + 6, y2: base + 6, stroke: '#3a3a40', 'stroke-dasharray': '2 3' }));
-  ['00:00', '06:00', '12:00', '18:00', 'now'].forEach((label, i) => {
-    const t = mk('text', { x: i === 4 ? 676 : 4 + i * 166, 'text-anchor': i === 4 ? 'end' : 'start', y: 91, 'font-size': 9, fill: '#6d6d74', 'font-family': 'monospace' });
-    t.textContent = label; lc.appendChild(t);
-  });
   document.querySelectorAll('svg.dm').forEach(svg => {
-    const pct = +svg.dataset.pct, color = svg.dataset.color, n = 53;
-    svg.appendChild(mk('rect', { x: .5, y: .5, width: 319, height: 15, rx: 4, fill: '#26262a', stroke: '#303035' }));
+    const w = svg.clientWidth || 320, pct = +svg.dataset.pct, color = svg.dataset.color || '#c8c8ce', pitch = 6, n = Math.floor((w - 6) / pitch);
+    svg.setAttribute('viewBox', `0 0 ${w} 16`); svg.style.width = '100%'; svg.style.height = '16px';
+    svg.appendChild(mk('rect', { x: .5, y: .5, width: w - 1, height: 15, rx: 4, fill: '#26262a', stroke: '#303035' }));
     for (let i = 0; i < n; i++) for (let j = 0; j < 2; j++) {
       const on = i / n < pct / 100;
-      svg.appendChild(mk('rect', { x: 4 + i * 5.95, y: 3.5 + j * 5, width: 3.4, height: 3.4, rx: .6, fill: on ? color : '#3a3a40', opacity: on ? (j ? .75 : 1) : .6 }));
+      svg.appendChild(mk('rect', { x: 4 + i * pitch, y: 3.5 + j * 5, width: 3.4, height: 3.4, rx: .6, fill: on ? color : '#3a3a40', opacity: on ? (j ? .75 : 1) : .6 }));
     }
-    svg.appendChild(mk('rect', { x: 4 + pct / 100 * n * 5.95, y: 1.5, width: 2, height: 13, rx: 1, fill: '#f2f2f4' }));
   });
 </script>
 </body>
