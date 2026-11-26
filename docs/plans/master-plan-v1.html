@@ -128,7 +128,7 @@
   .stt { font-size: 11.5px; color: var(--a-mute); }
   .syncpill { font-family: var(--mono); font-size: 11.5px; font-weight: 600; color: var(--a-ink); background: var(--a-raise); border: 1px solid var(--a-line); border-radius: 7px; padding: 3px 8px; display: inline-flex; align-items: center; gap: 6px; }
   .syncpill .sg { color: var(--a-mute); font-family: var(--sans); }
-  .statusbar { display: flex; justify-content: space-between; align-items: center; font-size: 10.5px; color: var(--a-mute); padding: 0 4px 8px 6px; margin-bottom: 4px; border-bottom: 1px solid var(--a-line); }
+  .statusbar { display: flex; justify-content: space-between; align-items: center; font-size: 10.5px; color: var(--a-mute); padding: 8px 4px 0 6px; margin-top: 4px; border-top: 1px solid var(--a-line); }
   .ib.sm { width: 20px; height: 20px; font-size: 11px; border-radius: 5px; }
   .hdicons { display: flex; gap: 6px; }
   .rowsync { display: inline-flex; align-items: center; gap: 8px; }
@@ -312,7 +312,6 @@ machines:
   <div class="app">
     <div class="bar-strip"><span>Wi-Fi</span><span class="me">◆ 1</span><span>20:31</span></div>
     <div class="pop">
-      <div class="statusbar"><span>1 needs sync · 3/4 online · 8s ago</span><span class="hdicons"><span class="ib sm" title="Open Menagerie">⧉</span><span class="ib sm" title="Settings">⚙</span></span></div>
       <div class="row-m2">
         <svg viewBox="0 0 30 22"><rect x="5" y="2" width="20" height="14" rx="1.5" fill="#2b2b30" stroke="#5a5a62"/><rect x="7" y="4" width="16" height="10" fill="#3d6fd8"/><rect x="1" y="16" width="28" height="3" rx="1.5" fill="#5a5a62"/></svg>
         <div><div class="n"><span class="dot" style="background:var(--a-green)"></span>richard-m4-max</div><div class="d">Workstation</div></div>
@@ -335,6 +334,7 @@ machines:
         <div><div class="n dim"><span class="dot hollow"></span>iphone-15-pro-max</div><div class="d">seen 2h ago</div></div>
         <span class="stt">offline</span>
       </div>
+      <div class="statusbar"><span>1 needs sync · 3/4 online · 8s ago</span><span class="hdicons"><span class="ib sm" title="Open Menagerie">⧉</span><span class="ib sm" title="Settings">⚙</span></span></div>
     </div>
   </div>
   <div>
@@ -342,7 +342,7 @@ machines:
       <li><b>The menu bar icon</b> carries the state: plain when everything is in sync, a count of machines that need attention, a spinner while syncing, red when a sync failed.</li>
       <li><b>One status vocabulary</b> in both views: a dot before the name (green in sync, amber needs attention, grey no agent, hollow offline) and the same words after it.</li>
       <li><b>No telemetry in the glance.</b> Load and battery appear here only when they are the reason for attention.</li>
-      <li><b>A thin status bar</b> at the top carries the summary (needs sync, online count, data age) in small grey text, with Open Menagerie and Settings as small icons on its right. A machine that needs a sync gets one quiet button showing its ahead/behind arrows and a sync icon. <b>Sync all</b> appears as a third icon only when two or more machines need it. It runs in the background and sends a notification when done.</li>
+      <li><b>A thin status bar</b> at the bottom carries the summary (needs sync, online count, data age) in small grey text, with Open Menagerie and Settings as small icons on its right. A machine that needs a sync gets one quiet button showing its ahead/behind arrows and a sync icon. <b>Sync all</b> appears as a third icon only when two or more machines need it. It runs in the background and sends a notification when done.</li>
       <li>All numbers in these mockups are placeholders.</li>
     </ul>
   </div>
