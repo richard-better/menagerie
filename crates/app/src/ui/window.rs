@@ -284,7 +284,6 @@ fn header(name: &str, machine: &Machine, status: Status) -> impl IntoElement {
         (None, None) => "Not managed by Menagerie".to_owned(),
     };
     let can_sync = machine.sync.is_some() && status.is_online();
-    let can_shell = machine.ssh.is_some() || machine.sync.is_some();
     div()
         .flex()
         .justify_between()
@@ -353,7 +352,7 @@ fn header(name: &str, machine: &Machine, status: Status) -> impl IntoElement {
                         .flex()
                         .gap(px(6.))
                         .child(text_button("changes", "Changes", status.is_online()))
-                        .child(text_button("terminal", "Terminal", can_shell))
+                        .child(text_button("terminal", "Terminal", false))
                         .child(text_button(
                             "sync",
                             if status.needs_sync() {
