@@ -79,6 +79,18 @@ pub enum SyncPreset {
     Custom,
 }
 
+impl SyncPreset {
+    /// How the preset is named in prose.
+    pub fn label(self) -> &'static str {
+        match self {
+            SyncPreset::NixDarwin => "nix-darwin",
+            SyncPreset::Nixos => "NixOS",
+            SyncPreset::HomeManager => "Home Manager",
+            SyncPreset::Custom => "Custom command",
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Service {
@@ -102,7 +114,9 @@ pub enum Error {
     },
     #[error("{0}")]
     Parse(#[from] serde_yaml_ng::Error),
-    #[error("fleet file version {found} is not supported; this build reads version {CURRENT_VERSION}")]
+    #[error(
+        "fleet file version {found} is not supported; this build reads version {CURRENT_VERSION}"
+    )]
     UnsupportedVersion { found: u32 },
     #[error("machine {machine}: {problem}")]
     Invalid { machine: String, problem: String },
@@ -185,7 +199,10 @@ mod tests {
         );
         let server = &fleet.machines["richard-hp-server"];
         assert_eq!(server.device, Device::Laptop);
-        assert_eq!(server.sync.as_ref().unwrap().preset, SyncPreset::HomeManager);
+        assert_eq!(
+            server.sync.as_ref().unwrap().preset,
+            SyncPreset::HomeManager
+        );
         assert_eq!(server.services.len(), 2);
         assert_eq!(server.services[0].icon.as_deref(), Some("jellyfin"));
         assert!(fleet.machines["homeassistant"].agent.is_none());
