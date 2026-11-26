@@ -75,6 +75,12 @@ pub struct Sync {
     /// The command to run when `preset` is `custom`.
     #[serde(default)]
     pub command: Option<String>,
+    /// The flake output to build, such as `richard-m4-max` or
+    /// `richard@richard-hp-server`. Defaults to the machine's name for
+    /// nix-darwin and NixOS, and to the `ssh` target (or the machine's name)
+    /// for Home Manager.
+    #[serde(default)]
+    pub flake: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
