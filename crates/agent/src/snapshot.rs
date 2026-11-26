@@ -198,10 +198,12 @@ impl Prober {
         }
     }
 
-    /// Keep the cache fresh for ever. Wall-clock time drives the schedule,
+    /// Keep the cache fresh for ever, starting one interval after the
+    /// `run_all` that filled it. Wall-clock time drives the schedule,
     /// because the monotonic clock stops while macOS sleeps.
     pub fn run_forever(mut self) -> ! {
-        let mut next: Vec<SystemTime> = vec![SystemTime::now(); SCHEDULE.len()];
+        let start = SystemTime::now();
+        let mut next: Vec<SystemTime> = SCHEDULE.iter().map(|(_, every)| start + *every).collect();
         let mut last_tick = SystemTime::now();
         loop {
             let now = SystemTime::now();
