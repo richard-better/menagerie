@@ -15,8 +15,8 @@ use crate::theme;
 pub fn status_dot(status: Status) -> Div {
     let dot = div().size(px(7.)).rounded_full().flex_none();
     match status {
-        Status::InSync => dot.bg(theme::green()),
-        Status::Drift { .. } => dot.bg(theme::amber()),
+        Status::InSync { dirty: false } | Status::Online => dot.bg(theme::green()),
+        Status::InSync { dirty: true } | Status::Drift { .. } => dot.bg(theme::amber()),
         Status::NoAgent => dot.bg(theme::grey_dot()),
         Status::Offline => dot.border_1().border_color(theme::grey_dot()),
     }
@@ -264,30 +264,40 @@ pub fn meter(fraction: Option<f32>, lit: Hsla) -> impl IntoElement {
     .h(px(16.))
 }
 
-/// A dot-matrix chart of `samples` (each 0.0 to 1.0, oldest first), with
-/// the newest column drawn brighter. An empty slice draws only the
-/// baseline, for a machine nobody has heard from.
-pub fn dot_chart(samples: Vec<f32>, height: f32) -> impl IntoElement {
+/// A dot-matrix chart. `points` are `(position, value)` pairs, both 0.0 to
+/// 1.0: position across the time range (1.0 is now), value up the scale.
+/// Each column shows the highest value that falls into it; columns with no
+/// samples draw only a dim baseline dot, so a short history stays at the
+/// right-hand end instead of being stretched across the range. The column
+/// holding the newest sample is drawn brighter.
+pub fn dot_chart(points: Vec<(f32, f32)>, height: f32) -> impl IntoElement {
     canvas(
         |_, _, _| {},
         move |bounds: Bounds<Pixels>, _, window: &mut Window, _| {
             let step = 6.0;
             let radius = 1.8;
             let rows = ((height - 4.0) / step).floor().max(1.0) as usize;
-            let cols = (f32::from(bounds.size.width) / step).floor() as usize;
-            for c in 0..cols {
-                let value = if samples.is_empty() {
-                    0.0
-                } else {
-                    let i = c * samples.len() / cols.max(1);
-                    samples[i.min(samples.len() - 1)]
+            let cols = (f32::from(bounds.size.width) / step).floor().max(1.0) as usize;
+            let mut columns: Vec<Option<f32>> = vec![None; cols];
+            let mut newest_col = None;
+            let mut newest_pos = f32::MIN;
+            for &(pos, value) in &points {
+                let c = ((pos.clamp(0.0, 1.0) * cols as f32) as usize).min(cols - 1);
+                columns[c] = Some(columns[c].map_or(value, |v: f32| v.max(value)));
+                if pos > newest_pos {
+                    newest_pos = pos;
+                    newest_col = Some(c);
+                }
+            }
+            for (c, column) in columns.iter().enumerate() {
+                let (lit, empty) = match column {
+                    Some(v) => (((v * rows as f32).round() as usize).clamp(1, rows), false),
+                    None => (1, true),
                 };
-                let lit = ((value * rows as f32).round() as usize).clamp(1, rows);
-                let newest = !samples.is_empty() && c == cols - 1;
                 for r in 0..lit {
-                    let colour = if samples.is_empty() {
+                    let colour = if empty {
                         theme::dot_off()
-                    } else if newest {
+                    } else if newest_col == Some(c) {
                         theme::ink().into()
                     } else {
                         theme::dot_on().opacity(0.35 + 0.4 * r as f32 / rows as f32)
