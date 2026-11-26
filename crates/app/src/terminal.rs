@@ -12,9 +12,10 @@
 //! piling up in memory, and each UI turn takes a capped amount of it.
 
 use std::io::{Read, Write};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::os::fd::{AsRawFd, FromRawFd, OwnedFd, RawFd};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::mpsc::SyncSender;
-use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use futures::{SinkExt, StreamExt};
@@ -26,7 +27,7 @@ use libghostty_vt::mode::Mode;
 use libghostty_vt::render::{CellIterator, RowIterator};
 use libghostty_vt::screen::CellWide;
 use libghostty_vt::{RenderState, Terminal};
-use portable_pty::{ChildKiller, CommandBuilder, MasterPty, PtySize, native_pty_system};
+use portable_pty::{Child, CommandBuilder, MasterPty, PtySize, native_pty_system};
 
 use crate::sync::Place;
 use crate::theme;
@@ -232,51 +233,104 @@ pub fn paste_bytes(text: &str, bracketed: bool) -> Vec<u8> {
     }
 }
 
-/// Writes queued for the PTY at most. Past this the program isn't reading
-/// its input, so more is dropped rather than held in memory.
+/// Writes queued for the PTY at most, and their total size. Past either the
+/// program isn't reading its input, so more is dropped instead of held.
 const WRITES: usize = 256;
+const WRITE_BYTES: usize = 1 << 20;
+/// The largest paste sent to the terminal.
+pub const PASTE_MAX: usize = 256 * 1024;
 /// How long a closed shell gets to exit on SIGHUP before it is killed.
 const CLOSE_GRACE: Duration = Duration::from_secs(1);
+/// How often the PTY threads look up from blocking work.
+const POLL_MS: i32 = 100;
 
-/// The shell's process. Closing it signals from its own thread, and one
-/// reaper thread collects its exit, so nothing here waits on the UI thread.
-#[derive(Clone)]
-struct Process {
-    pid: Option<u32>,
-    killer: Arc<Mutex<Box<dyn ChildKiller + Send + Sync>>>,
-    reaped: Arc<AtomicBool>,
+/// What the UI and the PTY threads share.
+#[derive(Default)]
+struct Shared {
+    /// Set when the terminal is closed: the threads stop, queued input is
+    /// discarded, and the shell is ended.
+    closed: AtomicBool,
+    /// Bytes queued for the writer thread.
+    pending: AtomicUsize,
 }
 
-impl Process {
-    /// SIGHUP, as closing a terminal sends, then SIGKILL to the shell's
-    /// process group if it is still running after a grace period. The PID is
-    /// only signalled while unreaped, so it can't be someone else's.
+impl Shared {
     fn close(&self) {
-        let this = self.clone();
-        std::thread::spawn(move || {
-            if this.reaped.load(Ordering::SeqCst) {
-                return;
-            }
-            let _ = this.killer.lock().map(|mut k| k.kill());
-            std::thread::sleep(CLOSE_GRACE);
-            if let Some(pid) = this.pid
-                && !this.reaped.load(Ordering::SeqCst)
-            {
-                // The shell leads its own session and process group on the PTY.
-                let _ = std::process::Command::new("kill")
-                    .args(["-KILL", "--", &format!("-{pid}")])
-                    .status();
-            }
-        });
+        self.closed.store(true, Ordering::SeqCst);
+    }
+
+    fn is_closed(&self) -> bool {
+        self.closed.load(Ordering::SeqCst)
     }
 }
 
-/// What the setup worker hands back once the shell is running.
+/// Owns the shell: the only thread that reaps it and the only one that
+/// signals it. It signals only after `try_wait` found the shell unreaped, and
+/// an exited shell stays a zombie until this thread reaps it, so the PID can
+/// never belong to someone else when it is signalled.
+fn supervise(mut child: Box<dyn Child + Send + Sync>, shared: Arc<Shared>) {
+    let pid = child
+        .process_id()
+        .and_then(|p| libc::pid_t::try_from(p).ok());
+    let mut hung_up: Option<std::time::Instant> = None;
+    loop {
+        if !matches!(child.try_wait(), Ok(None)) {
+            return;
+        }
+        if shared.is_closed()
+            && let Some(pid) = pid
+        {
+            let signal = match hung_up {
+                None => {
+                    hung_up = Some(std::time::Instant::now());
+                    Some(libc::SIGHUP)
+                }
+                Some(at) if at.elapsed() >= CLOSE_GRACE => Some(libc::SIGKILL),
+                Some(_) => None,
+            };
+            if let Some(signal) = signal {
+                // The shell leads its own process group on the PTY.
+                unsafe {
+                    libc::kill(-pid, signal);
+                    libc::kill(pid, signal);
+                }
+            }
+        }
+        std::thread::sleep(Duration::from_millis(if shared.is_closed() {
+            50
+        } else {
+            250
+        }));
+    }
+}
+
+/// A new descriptor for the PTY master. Closing it is all its drop does:
+/// portable-pty's own writer sends a newline and EOF when dropped, which
+/// would run a half-typed command.
+fn dup_fd(fd: RawFd) -> Result<OwnedFd, String> {
+    let new = unsafe { libc::dup(fd) };
+    if new < 0 {
+        return Err(std::io::Error::last_os_error().to_string());
+    }
+    Ok(unsafe { OwnedFd::from_raw_fd(new) })
+}
+
+/// What the setup worker hands back once the shell is running. Until a
+/// session takes it over, dropping it ends the shell.
 struct Spawned {
-    master: Box<dyn MasterPty + Send>,
-    reader: Box<dyn Read + Send>,
-    writer: Box<dyn Write + Send>,
-    process: Process,
+    master: Option<Box<dyn MasterPty + Send>>,
+    read: Option<OwnedFd>,
+    write: Option<OwnedFd>,
+    shared: Arc<Shared>,
+    adopted: bool,
+}
+
+impl Drop for Spawned {
+    fn drop(&mut self) {
+        if !self.adopted {
+            self.shared.close();
+        }
+    }
 }
 
 /// Open a PTY and start the shell on it. Runs on a worker thread.
@@ -309,54 +363,47 @@ fn spawn_shell(place: Place, dir: Option<std::path::PathBuf>) -> Result<Spawned,
     };
     command.env("TERM", "xterm-256color");
     command.env("COLORTERM", "truecolor");
-    let mut child = pty
+    let child = pty
         .slave
         .spawn_command(command)
         .map_err(|e| e.to_string())?;
     // The child holds its own copy; the parent's must close so EOF arrives.
     drop(pty.slave);
-    let process = Process {
-        pid: child.process_id(),
-        killer: Arc::new(Mutex::new(child.clone_killer())),
-        reaped: Arc::new(AtomicBool::new(false)),
-    };
-    let reaped = process.reaped.clone();
-    std::thread::spawn(move || {
-        let _ = child.wait();
-        reaped.store(true, Ordering::SeqCst);
-    });
-    let started = (|| {
-        let reader = pty.master.try_clone_reader().map_err(|e| e.to_string())?;
-        let writer = pty.master.take_writer().map_err(|e| e.to_string())?;
-        Ok::<_, String>((reader, writer))
-    })();
-    match started {
-        Ok((reader, writer)) => Ok(Spawned {
-            master: pty.master,
-            reader,
-            writer,
-            process,
-        }),
-        Err(e) => {
-            // Partly started: the shell mustn't outlive the failure.
-            process.close();
-            Err(e)
-        }
+    let shared = Arc::new(Shared::default());
+    {
+        let shared = shared.clone();
+        std::thread::spawn(move || supervise(child, shared));
     }
+    // From here on, any failure drops `spawned`, which ends the shell.
+    let mut spawned = Spawned {
+        master: None,
+        read: None,
+        write: None,
+        shared,
+        adopted: false,
+    };
+    let fd = pty
+        .master
+        .as_raw_fd()
+        .ok_or("the PTY has no file descriptor")?;
+    spawned.read = Some(dup_fd(fd)?);
+    spawned.write = Some(dup_fd(fd)?);
+    spawned.master = Some(pty.master);
+    Ok(spawned)
 }
 
-/// The live half of a terminal: the PTY and the process on it.
+/// The live half of a terminal: the PTY and the threads around it.
 struct Session {
     /// Bytes for the PTY, written by the writer thread.
     input: SyncSender<Vec<u8>>,
-    process: Process,
+    shared: Arc<Shared>,
     _master: Box<dyn MasterPty + Send>,
     _reader: Task<()>,
 }
 
 impl Drop for Session {
     fn drop(&mut self) {
-        self.process.close();
+        self.shared.close();
     }
 }
 
@@ -378,30 +425,24 @@ impl TerminalView {
     /// Setup happens on a worker; a failure shows in the view.
     pub fn new(place: &Place, dir: Option<std::path::PathBuf>, cx: &mut Context<Self>) -> Self {
         let place = place.clone();
+        // If the view goes away first, this task is dropped along with the
+        // `Spawned` it holds, and that ends the shell.
         let start = cx.spawn(async move |this, cx| {
             let spawned = cx
                 .background_executor()
                 .spawn(async move { spawn_shell(place, dir) })
                 .await;
-            let mut spawned = Some(spawned);
-            let attached = this.update(cx, |view, cx| {
+            let _ = this.update(cx, |view, cx| {
                 view.starting = false;
-                match spawned.take() {
-                    Some(Ok(s)) => view.attach(s, cx),
-                    Some(Err(e)) => {
+                match spawned {
+                    Ok(s) => view.attach(s, cx),
+                    Err(e) => {
                         view.error = Some(e);
                         view.exited = true;
                     }
-                    None => {}
                 }
                 cx.notify();
             });
-            // Closed while it was starting: end what was started.
-            if attached.is_err()
-                && let Some(Ok(s)) = spawned
-            {
-                s.process.close();
-            }
         });
         Self {
             screen: None,
@@ -418,32 +459,42 @@ impl TerminalView {
 
     /// Wire a running shell to the screen. On the UI thread, where the
     /// libghostty-vt handles live.
-    fn attach(&mut self, spawned: Spawned, cx: &mut Context<Self>) {
-        let Spawned {
-            master,
-            mut reader,
-            mut writer,
-            process,
-        } = spawned;
+    fn attach(&mut self, mut spawned: Spawned, cx: &mut Context<Self>) {
+        let (Some(master), Some(read), Some(write)) = (
+            spawned.master.take(),
+            spawned.read.take(),
+            spawned.write.take(),
+        ) else {
+            return;
+        };
+        let shared = spawned.shared.clone();
+
         let (input, keys) = std::sync::mpsc::sync_channel::<Vec<u8>>(WRITES);
+        let writer_shared = shared.clone();
         std::thread::spawn(move || {
+            let mut file = std::fs::File::from(write);
             for bytes in keys {
-                if writer
-                    .write_all(&bytes)
-                    .and_then(|_| writer.flush())
-                    .is_err()
-                {
+                // After Close, queued input is thrown away, not typed.
+                if writer_shared.is_closed() {
+                    return;
+                }
+                let len = bytes.len();
+                let ok = file.write_all(&bytes).is_ok();
+                writer_shared.pending.fetch_sub(len, Ordering::SeqCst);
+                if !ok {
                     return;
                 }
             }
         });
         let replies = input.clone();
+        let reply_shared = shared.clone();
         let screen = match Screen::new(COLS, ROWS, move |data| {
-            let _ = replies.try_send(data.to_vec());
+            queue(&replies, &reply_shared, data.to_vec());
         }) {
             Ok(screen) => screen,
             Err(e) => {
-                process.close();
+                // `spawned` drops un-adopted at the end of this function,
+                // ending the shell.
                 self.error = Some(e);
                 self.exited = true;
                 return;
@@ -451,10 +502,25 @@ impl TerminalView {
         };
 
         let (mut tx, mut rx) = futures::channel::mpsc::channel::<Vec<u8>>(QUEUE);
+        let reader_shared = shared.clone();
         std::thread::spawn(move || {
             let mut buf = [0u8; 8192];
+            let mut file = std::fs::File::from(read);
             loop {
-                match reader.read(&mut buf) {
+                if reader_shared.is_closed() {
+                    return;
+                }
+                // Wait for output, but look up regularly: a job outside the
+                // shell's group can hold the PTY open after Close.
+                let mut poll = libc::pollfd {
+                    fd: file.as_raw_fd(),
+                    events: libc::POLLIN,
+                    revents: 0,
+                };
+                if unsafe { libc::poll(&mut poll, 1, POLL_MS) } <= 0 {
+                    continue;
+                }
+                match file.read(&mut buf) {
                     Ok(0) | Err(_) => return,
                     // Blocks while the queue is full: backpressure on the PTY.
                     Ok(n) => {
@@ -496,10 +562,11 @@ impl TerminalView {
             });
         });
 
+        spawned.adopted = true;
         self.screen = Some(screen);
         self.session = Some(Session {
             input,
-            process,
+            shared,
             _master: master,
             _reader: reader_task,
         });
@@ -517,8 +584,7 @@ impl TerminalView {
 
     fn send(&mut self, bytes: Vec<u8>) {
         if let Some(session) = self.session.as_ref().filter(|_| !self.exited) {
-            // Full means the program isn't reading; dropping beats queueing.
-            let _ = session.input.try_send(bytes);
+            queue(&session.input, &session.shared, bytes);
         }
     }
 
@@ -527,8 +593,17 @@ impl TerminalView {
         let mode = |m| self.screen.as_ref().is_some_and(|s| s.mode(m));
         if k.modifiers.platform && k.key == "v" {
             if let Some(text) = cx.read_from_clipboard().and_then(|item| item.text()) {
-                let bytes = paste_bytes(&text, mode(Mode::BRACKETED_PASTE));
-                self.send(bytes);
+                if text.len() > PASTE_MAX {
+                    self.error = Some(format!(
+                        "Not pasted: {} KB is more than the {} KB limit.",
+                        text.len() / 1024,
+                        PASTE_MAX / 1024
+                    ));
+                    cx.notify();
+                } else {
+                    let bytes = paste_bytes(&text, mode(Mode::BRACKETED_PASTE));
+                    self.send(bytes);
+                }
             }
             cx.stop_propagation();
             return;
@@ -547,6 +622,19 @@ impl TerminalView {
     }
 }
 
+/// Queue bytes for the writer thread, unless the queue is full or they
+/// would take the pending total past `WRITE_BYTES`.
+fn queue(input: &SyncSender<Vec<u8>>, shared: &Shared, bytes: Vec<u8>) -> bool {
+    let len = bytes.len();
+    if shared.pending.fetch_add(len, Ordering::SeqCst) + len > WRITE_BYTES
+        || input.try_send(bytes).is_err()
+    {
+        shared.pending.fetch_sub(len, Ordering::SeqCst);
+        return false;
+    }
+    true
+}
+
 impl Focusable for TerminalView {
     fn focus_handle(&self, _cx: &gpui::App) -> FocusHandle {
         self.focus.clone()
@@ -561,11 +649,22 @@ impl Render for TerminalView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let focused = self.focus.is_focused(window);
         let cursor = self.cursor.filter(|_| focused && !self.exited);
+        // The real advance of Menlo here, so ASCII text lands on the grid.
+        let text_system = window.text_system();
+        let cell = text_system
+            .advance(
+                text_system.resolve_font(&gpui::font(theme::MONO)),
+                px(FONT_SIZE),
+                'm',
+            )
+            .map(|size| size.width)
+            .unwrap_or(px(CELL_WIDTH));
         let rows = self.lines.iter().enumerate().map(|(y, runs)| {
-            let mut row = div().flex().h(px(LINE_HEIGHT));
+            let cursor_col = cursor.filter(|&(_, cy)| cy as usize == y).map(|(cx, _)| cx);
+            let mut row = div().relative().h(px(LINE_HEIGHT));
             for run in runs {
-                let style = |text: String, inverse: bool| {
-                    let mut span = div().flex_none().child(text);
+                let style = |text: String, col: u16, inverse: bool| {
+                    let mut span = div().absolute().left(cell * col as f32).top_0().child(text);
                     let fg = run.fg.map(colour).unwrap_or(rgb(0xd8d8de));
                     let bg = run.bg.map(colour);
                     if inverse {
@@ -581,29 +680,34 @@ impl Render for TerminalView {
                     }
                     span
                 };
-                // Cells, not shaped text widths, decide where things go: a
-                // wide glyph gets exactly two cells whatever its fallback
-                // font measures, and the cursor is found by grid column.
-                let cursor_col = cursor.filter(|&(_, cy)| cy as usize == y).map(|(cx, _)| cx);
-                let mut narrow = String::new();
+                // Each segment starts at its own grid column, so no glyph's
+                // shaped width can push later ones off the grid. Plain ASCII
+                // shares a segment (Menlo's advance is the cell); anything
+                // else, and the glyph under the cursor, gets its own cell(s).
+                let mut ascii = String::new();
+                let mut ascii_col = 0;
                 for glyph in &run.glyphs {
-                    let under = cursor_col
-                        .is_some_and(|cx| cx >= glyph.col && cx < glyph.col + glyph.width);
-                    if glyph.width == 1 && !under {
-                        narrow.push_str(&glyph.text);
+                    let under =
+                        cursor_col.is_some_and(|c| c >= glyph.col && c < glyph.col + glyph.width);
+                    let plain = glyph.width == 1 && glyph.text.is_ascii() && !under;
+                    if plain {
+                        if ascii.is_empty() {
+                            ascii_col = glyph.col;
+                        }
+                        ascii.push_str(&glyph.text);
                         continue;
                     }
-                    if !narrow.is_empty() {
-                        row = row.child(style(std::mem::take(&mut narrow), false));
+                    if !ascii.is_empty() {
+                        row = row.child(style(std::mem::take(&mut ascii), ascii_col, false));
                     }
                     row = row.child(
-                        style(glyph.text.clone(), under)
-                            .w(px(CELL_WIDTH * glyph.width as f32))
+                        style(glyph.text.clone(), glyph.col, under)
+                            .w(cell * glyph.width as f32)
                             .overflow_hidden(),
                     );
                 }
-                if !narrow.is_empty() {
-                    row = row.child(style(narrow, false));
+                if !ascii.is_empty() {
+                    row = row.child(style(ascii, ascii_col, false));
                 }
             }
             row
@@ -626,7 +730,7 @@ impl Render for TerminalView {
             .overflow_x_scroll()
             .child(
                 div()
-                    .w(px(CELL_WIDTH * COLS as f32 + 20.))
+                    .w(cell * COLS as f32 + px(20.))
                     .h(px(LINE_HEIGHT * ROWS as f32 + 20.))
                     .p(px(10.))
                     .font_family(theme::MONO)
@@ -816,29 +920,34 @@ mod tests {
             .unwrap();
         let mut command = CommandBuilder::new("/bin/sh");
         command.args(["-c", "trap '' HUP; sleep 30"]);
-        let mut child = pty.slave.spawn_command(command).unwrap();
+        let child = pty.slave.spawn_command(command).unwrap();
         drop(pty.slave);
-        let process = Process {
-            pid: child.process_id(),
-            killer: Arc::new(Mutex::new(child.clone_killer())),
-            reaped: Arc::new(AtomicBool::new(false)),
+        let shared = Arc::new(Shared::default());
+        let supervisor = {
+            let shared = shared.clone();
+            std::thread::spawn(move || supervise(child, shared))
         };
-        let reaped = process.reaped.clone();
-        std::thread::spawn(move || {
-            let _ = child.wait();
-            reaped.store(true, Ordering::SeqCst);
-        });
-        std::thread::sleep(Duration::from_millis(200));
+        std::thread::sleep(Duration::from_millis(300));
         let started = std::time::Instant::now();
-        process.close();
-        while !process.reaped.load(Ordering::SeqCst) {
+        shared.close();
+        while !supervisor.is_finished() {
             assert!(
                 started.elapsed() < CLOSE_GRACE * 4,
                 "the shell outlived closing"
             );
             std::thread::sleep(Duration::from_millis(50));
         }
+        assert!(started.elapsed() >= CLOSE_GRACE, "it ignores SIGHUP");
         drop(pty.master);
+    }
+
+    #[test]
+    fn the_write_budget_holds() {
+        let (input, _keys) = std::sync::mpsc::sync_channel(WRITES);
+        let shared = Shared::default();
+        assert!(queue(&input, &shared, vec![0; WRITE_BYTES]));
+        assert!(!queue(&input, &shared, vec![0; 1]));
+        assert_eq!(shared.pending.load(Ordering::SeqCst), WRITE_BYTES);
     }
 
     #[test]
