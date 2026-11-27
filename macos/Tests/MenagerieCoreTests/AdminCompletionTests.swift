@@ -26,25 +26,30 @@ private final class AuthorizedTestChannel {
     process.waitUntilExit()
   }
 }
-@Test(arguments: [false, true])
-func administratorStopNeverAcceptsZeroExit(cancelInsteadOfTimeout: Bool) throws {
+@Test(arguments: ["timeout", "cancel", "timeoutThenCancel"])
+func administratorStopNeverAcceptsZeroExit(stopMode: String) throws {
   let channel = try AuthorizedTestChannel(arguments: [
     "-T", "-e", Administrator.supervisor, "--", "/bin/sh", "-c",
-    "trap 'exit 0' TERM; echo ready; while :; do sleep 1; done",
+    "trap 'echo stopping; exit 0' TERM; echo ready; while :; do sleep 1; done",
   ])
   let cancel = Cancellation()
   do {
     _ = try Administrator.runAuthorizedChannel(
-      channel.descriptor, timeout: cancelInsteadOfTimeout ? 30 : 0.1, cancel: cancel
+      channel.descriptor, timeout: stopMode == "cancel" ? 30 : 0.1, cancel: cancel
     ) { text in
-      if cancelInsteadOfTimeout && text.contains("ready") { cancel.cancel() }
+      if (stopMode == "cancel" && text.contains("ready"))
+        || (stopMode == "timeoutThenCancel" && text.contains("stopping"))
+      {
+        cancel.cancel()
+      }
     }
     Issue.record("Stop request must not succeed")
   } catch {
     #expect(
       String(describing: error)
-        == (cancelInsteadOfTimeout ? "Cancelled" : "Administrator command timed out"))
+        == (stopMode == "cancel" ? "Cancelled" : "Administrator command timed out"))
   }
+  if stopMode == "timeoutThenCancel" { #expect(cancel.isCancelled) }
 }
 @Test func administratorCompletionDoesNotWaitForEscapedOutputHolder() throws {
   let file = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
