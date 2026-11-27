@@ -5,11 +5,12 @@
 //! `run` executes the steps one after another, streaming every line of
 //! output, and stops at the first failure.
 //!
-//! On this Mac, `sudo` runs with `-A` and the app itself as the askpass
-//! helper (see `askpass`), so a password prompt is a native dialog, and
-//! Touch ID works when it is enabled for sudo. Over SSH there is no one to
-//! ask, so remote commands that need root use `sudo -n` and fail with a
-//! clear message unless the machine allows them without a password.
+//! On this Mac, the rebuild runs as root by itself, after the pull has run
+//! as you: with `sudo -n` when sudoers lets you run it without a password,
+//! else behind the system's administrator prompt (see `admin`). Over SSH
+//! there is no one to ask, so remote commands that need root use `sudo -n`
+//! and fail with a clear message unless the machine allows them without a
+//! password.
 //!
 //! Sync deploys commits, never a working tree: every machine builds the
 //! commit its checkout is on, so uncommitted edits (often a tool rewriting
@@ -22,9 +23,6 @@ use std::sync::mpsc::Sender;
 use std::sync::{Arc, Mutex};
 
 use menagerie_fleet::{Fleet, Machine, SyncPreset};
-
-/// Set on the app's own executable when sudo runs it as the askpass helper.
-pub const ASKPASS_ENV: &str = "MENAGERIE_ASKPASS";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Action {
@@ -48,8 +46,9 @@ pub struct Step {
     pub label: String,
     pub program: String,
     pub args: Vec<String>,
-    /// Run sudo with the app as its askpass helper.
-    pub askpass: bool,
+    /// Run as root on this Mac. Holds the reason the administrator prompt
+    /// gives, if one is needed.
+    pub admin: Option<String>,
 }
 
 impl Step {
@@ -58,7 +57,7 @@ impl Step {
             label: label.into(),
             program: program.to_owned(),
             args: args.iter().map(|a| a.to_string()).collect(),
-            askpass: false,
+            admin: None,
         }
     }
 }
@@ -165,16 +164,70 @@ pub fn plan(action: Action, fleet: &Fleet, name: &str, place: &Place) -> Result<
         SyncPreset::HomeManager => machine.ssh.clone().unwrap_or_else(|| name.to_owned()),
         _ => name.to_owned(),
     });
+
+    // This Mac's system rebuild needs root: the pull runs as you, then the
+    // rebuild runs by itself as root, so that passwordless sudo can allow
+    // exactly that command, and the administrator prompt covers only it.
+    if *place == Place::Here
+        && let Some(rebuild) = match sync.preset {
+            SyncPreset::NixDarwin => Some("/run/current-system/sw/bin/darwin-rebuild"),
+            SyncPreset::Nixos => Some("/run/current-system/sw/bin/nixos-rebuild"),
+            _ => None,
+        }
+    {
+        let dir = menagerie_fleet::expand_home(&repo);
+        let mut step = match action {
+            Action::Sync => {
+                let pull = sh_quote(&format!("refs/heads/{}", fleet.branch()));
+                let script = format!(
+                    "cd {} || exit 1\n\
+                     if [ \"$(git symbolic-ref --quiet HEAD)\" != {pull} ]; then\n\
+                     \x20 echo \"This Mac's checkout isn't on the configured branch.\" >&2; exit 1\n\
+                     fi\n\
+                     {}",
+                    sh_quote(&dir.to_string_lossy()),
+                    fast_forward(&pull),
+                );
+                steps.push(Step::new(
+                    "Pull this Mac's checkout",
+                    "/bin/sh",
+                    &["-c", &script],
+                ));
+                // The branch's commit, which the pull just brought up to
+                // date, never the working tree.
+                let flake = format!(
+                    "git+file://{}?ref=refs/heads/{}#{attr}",
+                    dir.to_string_lossy()
+                        .replace('%', "%25")
+                        .replace(' ', "%20"),
+                    fleet.branch()
+                );
+                Step::new("Switch this Mac", rebuild, &["switch", "--flake", &flake])
+            }
+            Action::Rollback => match sync.preset {
+                SyncPreset::NixDarwin => Step::new("Roll this Mac back", rebuild, &["--rollback"]),
+                _ => Step::new("Roll this Mac back", rebuild, &["switch", "--rollback"]),
+            },
+        };
+        step.admin = Some(
+            match action {
+                Action::Sync => "Menagerie needs to switch this Mac to its new configuration.",
+                Action::Rollback => {
+                    "Menagerie needs to roll this Mac back to its previous configuration."
+                }
+            }
+            .to_owned(),
+        );
+        steps.push(step);
+        return Ok(steps);
+    }
     // The commit the checkout is on, not its working tree: set by
     // `FLAKE_AT_HEAD` in the script.
     let target = format!("\"$flake\"{}", sh_quote(&format!("#{attr}")));
 
     // The machine's own commands, written as one shell script so they run
     // in its checkout, here or over SSH.
-    let sudo = match place {
-        Place::Here => "sudo -A",
-        Place::Ssh(_) => "sudo -n",
-    };
+    let sudo = "sudo -n";
     let rebuild = match (action, sync.preset) {
         (Action::Sync, SyncPreset::NixDarwin) => {
             format!("{sudo} darwin-rebuild switch --flake {target}")
@@ -226,7 +279,7 @@ pub fn plan(action: Action, fleet: &Fleet, name: &str, place: &Place) -> Result<
         (Action::Rollback, Place::Here) => "Roll this Mac back".to_owned(),
         (Action::Rollback, Place::Ssh(to)) => format!("Roll back {to}"),
     };
-    let mut step = match place {
+    let step = match place {
         // A login shell, so the machine's Nix tools are on PATH.
         Place::Here => Step::new(label, "/bin/sh", &["-lc", &script]),
         Place::Ssh(to) => Step::new(
@@ -246,7 +299,6 @@ pub fn plan(action: Action, fleet: &Fleet, name: &str, place: &Place) -> Result<
             ],
         ),
     };
-    step.askpass = *place == Place::Here && rebuild.contains("sudo -A");
     steps.push(step);
     Ok(steps)
 }
@@ -320,6 +372,8 @@ struct CancelState {
     cancelled: bool,
     /// The running step's process group, or 0 between steps.
     group: u32,
+    /// Stops the running step when it runs as root behind the prompt.
+    stopper: Option<crate::admin::Stopper>,
 }
 
 impl Cancel {
@@ -329,6 +383,9 @@ impl Cancel {
         let group = {
             let mut state = self.0.lock().unwrap_or_else(|e| e.into_inner());
             state.cancelled = true;
+            if let Some(stopper) = &state.stopper {
+                stopper.stop();
+            }
             state.group
         };
         if group == 0 {
@@ -366,18 +423,22 @@ pub fn run(steps: Vec<Step>, events: Sender<Event>, cancel: Cancel) {
 fn run_step(step: &Step, events: &Sender<Event>, cancel: &Cancel) -> Result<(), String> {
     use std::os::unix::process::CommandExt;
     let _ = events.send(Event::Line(format!("▸ {}", step.label)));
-    let mut command = Command::new(&step.program);
+    let mut command = match &step.admin {
+        // Without a prompt when sudoers allows it, else behind one.
+        Some(_) if sudo_allows(&step.program, &step.args) => {
+            let mut c = Command::new("sudo");
+            c.arg("-n").arg(&step.program);
+            c
+        }
+        Some(prompt) => return run_admin(step, prompt, events, cancel),
+        None => Command::new(&step.program),
+    };
     command
         .args(&step.args)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .env("GIT_TERMINAL_PROMPT", "0");
-    if step.askpass
-        && let Ok(exe) = std::env::current_exe()
-    {
-        command.env("SUDO_ASKPASS", exe).env(ASKPASS_ENV, "1");
-    }
     let mut child = {
         let mut state = cancel.0.lock().unwrap_or_else(|e| e.into_inner());
         if state.cancelled {
@@ -575,19 +636,70 @@ mod cancel_tests {
     }
 }
 
-/// Act as sudo's askpass helper: ask for the password in a native dialog
-/// and print it. Returns the process exit code.
-pub fn askpass() -> i32 {
-    let script = r#"text returned of (display dialog "Menagerie needs your password to switch this Mac's configuration." default answer "" with hidden answer with title "Menagerie" with icon caution)"#;
-    match Command::new("osascript").args(["-e", script]).output() {
-        Ok(out) if out.status.success() => {
-            print!(
-                "{}",
-                String::from_utf8_lossy(&out.stdout).trim_end_matches('\n')
-            );
-            0
+/// Whether sudoers lets you run exactly `program args` as root without a
+/// password.
+fn sudo_allows(program: &str, args: &[String]) -> bool {
+    Command::new("sudo")
+        .args(["-n", "-l", program])
+        .args(args)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .is_ok_and(|s| s.success())
+}
+
+/// Run a step as root behind the system's administrator prompt.
+fn run_admin(
+    step: &Step,
+    prompt: &str,
+    events: &Sender<Event>,
+    cancel: &Cancel,
+) -> Result<(), String> {
+    if cancel.is_cancelled() {
+        return Err("Cancelled".to_owned());
+    }
+    // What sudo would set, so the command can tell who asked.
+    let uid = unsafe { libc::getuid() };
+    let gid = unsafe { libc::getgid() };
+    let mut env = vec![
+        ("SUDO_UID".to_owned(), uid.to_string()),
+        ("SUDO_GID".to_owned(), gid.to_string()),
+    ];
+    for name in ["USER", "HOME"] {
+        if let Ok(value) = std::env::var(name) {
+            let key = if name == "USER" { "SUDO_USER" } else { name };
+            env.push((key.to_owned(), value));
         }
-        _ => 1,
+    }
+    let running = match crate::admin::start(prompt, &step.program, &step.args, &env) {
+        Ok(running) => running,
+        Err(None) => return Err("Cancelled at the administrator prompt".to_owned()),
+        Err(Some(why)) => return Err(format!("{} failed: {why}", step.label)),
+    };
+    let stopper = running.stopper()?;
+    {
+        let mut state = cancel.0.lock().unwrap_or_else(|e| e.into_inner());
+        if state.cancelled {
+            stopper.stop();
+        }
+        state.stopper = Some(stopper);
+    }
+    let mut last = None;
+    let result = running.wait(|line| {
+        let line = strip_ansi(&line);
+        if !line.trim().is_empty() {
+            last = Some(line.clone());
+        }
+        let _ = events.send(Event::Line(line));
+    });
+    cancel.0.lock().unwrap_or_else(|e| e.into_inner()).stopper = None;
+    match result? {
+        0 => Ok(()),
+        code => Err(match last {
+            Some(why) => format!("{} failed: {why}", step.label),
+            None => format!("{} failed (exit status {code})", step.label),
+        }),
     }
 }
 
@@ -685,29 +797,54 @@ mod tests {
     }
 
     #[test]
-    fn syncs_this_mac_with_darwin_rebuild_and_askpass() {
+    fn syncs_this_mac_by_pulling_as_you_then_switching_as_root() {
         let steps = plan(Action::Sync, &fleet(), "richard-m4-max", &Place::Here).unwrap();
-        assert_eq!(steps.len(), 2, "the checkout step, then the switch");
-        assert_eq!(steps[0].label, "Check your checkout and push its commits");
-        let step = &steps[1];
-        assert_eq!(step.program, "/bin/sh");
-        let script = &step.args[1];
+        let labels: Vec<&str> = steps.iter().map(|s| s.label.as_str()).collect();
+        assert_eq!(
+            labels,
+            [
+                "Check your checkout and push its commits",
+                "Pull this Mac's checkout",
+                "Switch this Mac"
+            ]
+        );
+        let pull = &steps[1];
+        assert!(pull.admin.is_none(), "git never runs as root");
+        let script = &pull.args[1];
+        let home = std::env::var("HOME").unwrap();
         assert!(
-            script.starts_with("cd ~/'dev/gh/richard-better/mac' || exit 1\n"),
+            script.starts_with(&format!(
+                "cd '{home}/dev/gh/richard-better/mac' || exit 1\n"
+            )),
             "{script}"
         );
         assert!(script.contains("!= 'refs/heads/main' ]"), "{script}");
         assert!(
-            script.contains(&format!("{}\n", fast_forward("'refs/heads/main'"))),
+            script.ends_with(&fast_forward("'refs/heads/main'")),
             "{script}"
         );
-        assert!(
-            script.ends_with(&format!(
-                "{FLAKE_AT_HEAD}\nsudo -A darwin-rebuild switch --flake \"$flake\"'#richard-m4-max'"
-            )),
-            "{script}"
+
+        // Only the rebuild runs as root, as one exact command that a
+        // sudoers rule can allow, building the branch's commit.
+        let switch = &steps[2];
+        assert_eq!(switch.program, "/run/current-system/sw/bin/darwin-rebuild");
+        assert_eq!(
+            switch.args,
+            [
+                "switch".to_owned(),
+                "--flake".to_owned(),
+                format!(
+                    "git+file://{}/dev/gh/richard-better/mac?ref=refs/heads/main#richard-m4-max",
+                    home.replace(' ', "%20")
+                ),
+            ]
         );
-        assert!(step.askpass);
+        assert!(switch.admin.is_some());
+
+        let rollback = plan(Action::Rollback, &fleet(), "richard-m4-max", &Place::Here).unwrap();
+        assert_eq!(rollback.len(), 1);
+        assert_eq!(rollback[0].args, ["--rollback"]);
+        assert!(rollback[0].admin.is_some());
     }
 
     #[test]
@@ -727,7 +864,7 @@ mod tests {
         assert!(remote.contains("home-manager switch --flake"), "{remote}");
         assert!(remote.contains("#richard@richard-hp-server"), "{remote}");
         assert!(remote.contains("?rev=$(git rev-parse HEAD)"), "{remote}");
-        assert!(!step.askpass);
+        assert!(step.admin.is_none());
         let rollback = plan(Action::Rollback, &fleet(), "richard-hp-server", &place).unwrap();
         assert_eq!(rollback.len(), 1, "rolling back doesn't touch the checkout");
         assert!(rollback[0].args[7].contains("home-manager switch --rollback"));

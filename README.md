@@ -4,7 +4,7 @@ A menu bar manager for a small fleet of personal machines: pets, not cattle.
 
 Menagerie shows each machine's health, its services, and how far its configuration is ahead of or behind your repo, and syncs it in one click. The plan is in [docs/plans/master-plan-v1.html](docs/plans/master-plan-v1.html).
 
-**Status:** early, and in daily use on one fleet. The agent reports each machine's health and the commit its configuration was built from; the app shows that live, syncs or rolls a machine back (on this Mac with sudo's native password dialog, elsewhere over SSH), and opens a terminal on any machine, emulated by Ghostty's libghostty-vt.
+**Status:** early, and in daily use on one fleet. The agent reports each machine's health and the commit its configuration was built from; the app shows that live, syncs or rolls a machine back (on this Mac behind the system's administrator prompt, or none at all if sudoers allows the exact rebuild command; elsewhere over SSH), and opens a terminal on any machine, emulated by Ghostty's libghostty-vt.
 
 ## The fleet file
 

@@ -8,6 +8,7 @@ use gpui::{
     WindowOptions, point, px, size,
 };
 
+pub mod admin;
 pub mod assets;
 pub mod commit;
 pub mod live;
