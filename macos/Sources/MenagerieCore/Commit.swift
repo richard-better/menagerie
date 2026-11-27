@@ -126,9 +126,24 @@ public enum Commit {
         untracked.append(change.path)
       }
     }
-    var text =
+    let patch =
       tracked.isEmpty
-      ? "" : try Runner.git(repo, ["diff", "HEAD", "--no-renames", "--no-color", "--"] + tracked)
+      ? ""
+      : try Runner.git(
+        repo,
+        [
+          "-c", "core.quotePath=true", "diff", "HEAD", "--no-renames", "--no-color",
+          "--no-ext-diff", "--no-textconv", "--ignore-submodules=none", "--src-prefix=a/",
+          "--dst-prefix=b/", "--",
+        ] + tracked)
+    let headers = Set(
+      tracked.map { "diff --git " + patchPath("a/" + $0) + " " + patchPath("b/" + $0) })
+    var text = ""
+    var included = false
+    for line in patch.split(separator: "\n", omittingEmptySubsequences: false) {
+      if line.hasPrefix("diff --git ") { included = headers.contains(String(line)) }
+      if included { text += line + "\n" }
+    }
     for path in untracked {
       text += "\nNew file \(path):\n" + (smallText(repo: repo, path: path) ?? "(not shown)") + "\n"
       if text.utf8.count > 200 * 1024 { break }
@@ -137,6 +152,25 @@ public enum Commit {
       text = String(decoding: text.utf8.prefix(200 * 1024), as: UTF8.self) + "\n[diff truncated]\n"
     }
     return (text, changes.filter { looksSecret($0.path) }.map(\.path))
+  }
+  private static func patchPath(_ path: String) -> String {
+    var escaped = ""
+    var quoted = false
+    let escapes: [UInt8: String] = [
+      7: "a", 8: "b", 9: "t", 10: "n", 11: "v", 12: "f", 13: "r", 34: "\"", 92: "\\",
+    ]
+    for byte in path.utf8 {
+      if let escape = escapes[byte] {
+        escaped += "\\" + escape
+        quoted = true
+      } else if byte < 32 || byte >= 127 {
+        escaped += String(format: "\\%03o", Int(byte))
+        quoted = true
+      } else {
+        escaped += String(UnicodeScalar(byte))
+      }
+    }
+    return quoted ? "\"" + escaped + "\"" : escaped
   }
   public static func cleanMessage(_ text: String) -> String? {
     text.components(separatedBy: .newlines).map { $0.trimmingCharacters(in: .whitespaces) }

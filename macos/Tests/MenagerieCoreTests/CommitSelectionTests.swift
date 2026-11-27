@@ -142,3 +142,38 @@ import Testing
   #expect(try Runner.git(repo.path, ["diff", "--cached", "--name-only"]).isEmpty)
   #expect(!FileManager.default.fileExists(atPath: repo.path + "/.git/index.lock"))
 }
+
+@Test func draftNeverIncludesDescendantsOfSelectedFile() throws {
+  let repo = try Repository()
+  defer { repo.remove() }
+  try repo.write("settings", "old settings")
+  _ = try Runner.git(repo.path, ["add", "settings"])
+  _ = try Runner.git(repo.path, ["commit", "-qm", "settings"])
+  try FileManager.default.removeItem(atPath: repo.path + "/settings")
+  try FileManager.default.createDirectory(
+    atPath: repo.path + "/settings", withIntermediateDirectories: false)
+  try repo.write("settings/private-token", "DO_NOT_DISCLOSE")
+  _ = try Runner.git(repo.path, ["add", "-A", "settings"])
+  let input = try Commit.draftInput(
+    repo: repo.path,
+    changes: [
+      Change(path: "settings", kind: "deleted"),
+      Change(path: "settings/private-token", kind: "new"),
+    ])
+  #expect(input.text.contains("old settings"))
+  #expect(!input.text.contains("DO_NOT_DISCLOSE") && !input.text.contains("private-token"))
+  #expect(input.withheld == ["settings/private-token"])
+}
+
+@Test(arguments: ["space name", "tab\tname", "line\nname", "café", "quote\"name", "back\\slash"])
+func draftRetainsSelectedQuotedPaths(path: String) throws {
+  let repo = try Repository()
+  defer { repo.remove() }
+  try repo.write(path, "before")
+  _ = try Runner.git(repo.path, ["add", "--", path])
+  _ = try Runner.git(repo.path, ["commit", "-qm", "base"])
+  try repo.write(path, "SELECTED_EDIT")
+  #expect(
+    try Commit.draftInput(repo: repo.path, changes: [Change(path: path, kind: "modified")]).text
+      .contains("SELECTED_EDIT"))
+}
