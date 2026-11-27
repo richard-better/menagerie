@@ -29,8 +29,8 @@ machines:
         icon: jellyfin
         url: http://richard-hp-server:8096
         health: http://richard-hp-server:8096/health
-      - name: Jellyseerr
-        icon: jellyseerr
+      - name: Seerr
+        icon: seerr
         url: http://richard-hp-server:5055
 
   homeassistant:
