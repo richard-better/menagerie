@@ -144,15 +144,18 @@ struct FleetView: View {
               model.selected = name
               model.page = "details"
             } label: {
-              VStack(spacing: 9) {
+              VStack(spacing: 7) {
                 DeviceIcon(
-                  machine: machine, status: model.status(name), size: 32, badge: 10,
+                  machine: machine, status: model.status(name), size: 28, badge: 9,
                   tint: model.selected == name ? Palette.ink : Palette.muted)
-                Text(name).font(.caption).lineLimit(1)
-                // Only drift is worth words here: the strip has no Sync action.
-                Text(model.status(name).needsSync ? model.status(name).label : " ")
-                  .font(.caption2).foregroundStyle(Palette.amber)
-              }.frame(maxWidth: .infinity).padding(.vertical, 22).contentShape(Rectangle())
+                HStack(spacing: 4) {
+                  Text(name).lineLimit(1)
+                  // Only drift is worth words here: the strip has no Sync action.
+                  if model.status(name).needsSync {
+                    Text(model.status(name).label).foregroundStyle(Palette.amber)
+                  }
+                }.font(.caption)
+              }.frame(maxWidth: .infinity).padding(.vertical, 10).contentShape(Rectangle())
             }.buttonStyle(.plain).accessibilityAddTraits(model.selected == name ? .isSelected : [])
           }
         }
@@ -204,8 +207,15 @@ struct FleetView: View {
         }
       }.font(.caption).foregroundStyle(Palette.muted).padding(12)
     }.foregroundStyle(Palette.ink).background(Palette.background).preferredColorScheme(.dark)
-      .frame(minWidth: 680, minHeight: 560)
+      .frame(minWidth: 680, minHeight: 520)
+      // One surface from the traffic lights down to the panel, as in the
+      // reference: no title, no separate title bar colour.
+      .toolbar(removing: .title)
+      .toolbarBackgroundVisibility(.hidden, for: .windowToolbar)
       .toolbar {
+        // Pinned right: without a title the default placement drifts left,
+        // next to the traffic lights.
+        ToolbarSpacer(.flexible)
         ToolbarItem {
           Button("Refresh", systemImage: "arrow.clockwise") {
             Task {
