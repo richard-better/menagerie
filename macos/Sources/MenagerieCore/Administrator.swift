@@ -88,7 +88,13 @@ public enum Administrator {
       fclose(channel)
       menagerie_admin_free(auth)
     }
-    let fd = fileno(channel)
+    return try runAuthorizedChannel(
+      fileno(channel), timeout: command.timeout, cancel: cancel, output: output)
+  }
+  static func runAuthorizedChannel(
+    _ fd: Int32, timeout: TimeInterval, cancel: Cancellation,
+    completionGrace: TimeInterval = 3, output: @Sendable (String) -> Void
+  ) throws -> CommandResult {
     _ = fcntl(fd, F_SETFD, FD_CLOEXEC)
     _ = fcntl(fd, F_SETFL, O_NONBLOCK)
     _ = fcntl(fd, F_SETNOSIGPIPE, 1)
@@ -107,10 +113,19 @@ public enum Administrator {
     var exit: Int32?
     var pid: pid_t?
     let start = Date()
-    while true {
-      if cancel.isCancelled || Date().timeIntervalSince(start) > command.timeout {
-        shutdown(fd, SHUT_WR)
+    var stop: (reason: String, at: Date)?
+    func requestStopIfNeeded() {
+      guard stop == nil else { return }
+      if cancel.isCancelled {
+        stop = ("Cancelled", Date())
+      } else if Date().timeIntervalSince(start) >= timeout {
+        stop = ("Administrator command timed out", Date())
       }
+      if stop != nil { shutdown(fd, SHUT_WR) }
+    }
+    while exit == nil {
+      requestStopIfNeeded()
+      if let stop, Date().timeIntervalSince(stop.at) >= completionGrace { break }
       var descriptor = pollfd(fd: fd, events: Int16(POLLIN), revents: 0)
       _ = poll(&descriptor, 1, 100)
       let count = read(fd, &bytes, bytes.count)
@@ -141,7 +156,8 @@ public enum Administrator {
       var status: Int32 = 0
       _ = waitpid(pid, &status, WNOHANG)
     }
-    guard !cancel.isCancelled else { throw FleetError("Cancelled") }
+    requestStopIfNeeded()
+    if let stop { throw FleetError(stop.reason) }
     guard let exit else { throw FleetError("Administrator command ended without reporting status") }
     return CommandResult(status: exit, output: tail)
   }
