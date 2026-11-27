@@ -53,10 +53,20 @@ struct FleetPopover: View {
                     Text(name).fontWeight(.medium)
                   }
                   Text(machine.role ?? "").font(.caption).foregroundStyle(Palette.muted)
+                  if let job = model.jobs[name], !job.running, let result = job.result {
+                    Text(result).font(.caption).foregroundStyle(
+                      result == "Succeeded" ? Palette.green : Palette.amber
+                    ).lineLimit(2).help(result)
+                  }
                 }
               }.frame(maxWidth: .infinity, alignment: .leading).contentShape(Rectangle())
             }.buttonStyle(.plain)
-            if model.status(name).needsSync {
+            if let job = model.jobs[name], job.running {
+              VStack(spacing: 4) {
+                Text("Syncing…").font(.caption)
+                Button("Cancel") { job.cancel.cancel() }.buttonStyle(.glass)
+              }
+            } else if model.status(name).needsSync {
               Button(model.status(name).label, systemImage: "arrow.trianglehead.2.clockwise") {
                 model.deploy(name, action: .sync)
               }.buttonStyle(.glass).disabled(model.jobs[name]?.running == true)
@@ -378,7 +388,8 @@ struct CommitPage: View {
       Text(model.commitNote).font(.caption).textSelection(.enabled)
       HStack {
         Button(model.drafting ? "Drafting…" : "Draft message", action: model.draft).disabled(
-          model.drafting || model.committing || model.fleet?.commitMessage == nil)
+          model.drafting || model.committing || model.loadingChanges
+            || model.commitContext?.draftCommand == nil)
         Spacer()
         Button(model.committing ? "Committing…" : "Commit and push", action: model.commit)
           .buttonStyle(.glassProminent).disabled(

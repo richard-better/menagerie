@@ -22,10 +22,43 @@ import Observation
   var committing = false
   var drafting = false
   var terminals: [String: TerminalSession] = [:]
+  struct CommitContext: Equatable {
+    var repo: String
+    var branch: String
+    var draftCommand: String?
+  }
+  private(set) var commitContext: CommitContext?
+  private var commitGeneration = 0
+  private(set) var loadingChanges = false
+  private var mutatingCheckouts: Set<String> = []
+  private func context(for fleet: Fleet?) -> CommitContext? {
+    guard let fleet, let repo = fleet.repoPath else { return nil }
+    return CommitContext(repo: repo, branch: fleet.branch, draftCommand: fleet.commitMessage)
+  }
+  private func invalidateCommitPage() {
+    commitGeneration += 1
+    commitContext = nil
+    loadingChanges = false
+    files = []
+    included = []
+    message = ""
+    commitNote = ""
+    drafting = false
+  }
+  private func claim(_ paths: [String]) -> Set<String>? {
+    let keys = Set(paths.map(CheckoutMutation.key))
+    guard mutatingCheckouts.isDisjoint(with: keys) else {
+      error = "A job is already mutating this checkout"
+      return nil
+    }
+    mutatingCheckouts.formUnion(keys)
+    return keys
+  }
   func closeWindow() {
     for terminal in terminals.values { terminal.transport.stop() }
     if !terminals.isEmpty { terminals.removeAll() }
     if page != "details" { page = "details" }
+    if commitContext != nil && !committing { invalidateCommitPage() }
     if !committing && !drafting {
       if !files.isEmpty { files = [] }
       if !included.isEmpty { included = [] }
@@ -98,6 +131,7 @@ import Observation
     switch result {
     case .success(let new):
       error = nil
+      if context(for: new) != context(for: fleet) { invalidateCommitPage() }
       if new.machines != fleet?.machines || new.repo != fleet?.repo || new.branch != fleet?.branch {
         generation += 1
         observations = [:]
@@ -110,6 +144,7 @@ import Observation
       fleet = new
       if new.machines[selected] == nil { selected = new.order.first ?? "" }
     case .failure(let failure):
+      invalidateCommitPage()
       if fleet != nil {
         generation += 1
         observations = [:]
@@ -163,8 +198,23 @@ import Observation
       NSWorkspace.shared.open(url)
     } catch { self.error = String(describing: error) }
   }
-  func deploy(_ name: String, action: Deployment.Action) {
+  func deploy(
+    _ name: String, action: Deployment.Action,
+    run: @escaping @Sendable ([DeploymentStep], Cancellation, OutputBuffer) async throws -> Void = {
+      steps, cancellation, buffer in
+      try await Task.detached {
+        try Deployment.run(steps, cancel: cancellation, output: { buffer.append($0) })
+      }.value
+    }
+  ) {
     guard let fleet, jobs[name]?.running != true else { return }
+    let steps: [DeploymentStep]
+    do { steps = try Deployment.plan(action, fleet: fleet, name: name) } catch {
+      self.error = String(describing: error)
+      return
+    }
+    guard let paths = claim(steps.flatMap(\.checkouts)) else { return }
+    selected = name
     let job = Job()
     jobs[name] = job
     page = "log"
@@ -180,64 +230,99 @@ import Observation
         job.text = job.output.text
       }
       do {
-        let steps = try Deployment.plan(action, fleet: fleet, name: name)
-        let cancellation = job.cancel
-        let buffer = job.output
-        try await Task.detached {
-          try Deployment.run(steps, cancel: cancellation, output: { buffer.append($0) })
-        }.value
+        try await run(steps, job.cancel, job.output)
         job.result = "Succeeded"
       } catch { job.result = String(describing: error) }
       job.running = false
+      mutatingCheckouts.subtract(paths)
       await poll()
     }
   }
   func loadChanges() {
-    guard let repo = fleet?.repoPath else { return }
+    loadChanges(using: { repo in try await Task.detached { try Commit.changes(repo: repo) }.value })
+  }
+  @discardableResult func loadChanges(
+    using load: @escaping @Sendable (String) async throws -> [Change]
+  ) -> Task<Void, Never>? {
+    guard let captured = context(for: fleet) else { return nil }
+    invalidateCommitPage()
+    commitContext = captured
+    let token = commitGeneration
     page = "commit"
     commitNote = "Loading changes…"
-    Task {
+    loadingChanges = true
+    return Task {
+      defer { if token == commitGeneration { loadingChanges = false } }
       do {
-        files = try await Task.detached { try Commit.changes(repo: repo) }.value
-        included = Set(files.map(\.path))
-        message = Commit.template(files)
+        let loaded = try await load(captured.repo)
+        guard token == commitGeneration && captured == context(for: fleet) else { return }
+        files = loaded
+        included = Set(loaded.map(\.path))
+        message = Commit.template(loaded)
         commitNote = ""
-      } catch { commitNote = String(describing: error) }
+      } catch {
+        if token == commitGeneration { commitNote = String(describing: error) }
+      }
     }
   }
   func draft() {
-    guard let repo = fleet?.repoPath, let command = fleet?.commitMessage, !drafting else { return }
+    draft(using: { command, repo, files in
+      try await Task.detached {
+        let input = try Commit.draftInput(repo: repo, changes: files)
+        return (try Commit.draft(command: command, repo: repo, input: input.text), input.withheld)
+      }.value
+    })
+  }
+  @discardableResult func draft(
+    using run: @escaping @Sendable (String, String, [Change]) async throws -> (String, [String])
+  ) -> Task<Void, Never>? {
+    guard let captured = commitContext, captured == context(for: fleet),
+      let command = captured.draftCommand, !drafting, !loadingChanges
+    else { return nil }
     drafting = true
-    let files = files.filter { included.contains($0.path) }
-    Task {
-      defer { drafting = false }
+    let token = commitGeneration
+    let selection = included
+    let original = files
+    let before = message
+    let chosen = files.filter { selection.contains($0.path) }
+    return Task {
+      defer { if token == commitGeneration { drafting = false } }
       do {
-        let result = try await Task.detached {
-          let input = try Commit.draftInput(repo: repo, changes: files)
-          return (try Commit.draft(command: command, repo: repo, input: input.text), input.withheld)
-        }.value
+        let result = try await run(command, captured.repo, chosen)
+        guard token == commitGeneration, captured == context(for: fleet), selection == included,
+          original == files, before == message
+        else { return }
         message = result.0
         commitNote =
           result.1.isEmpty ? "" : "Withheld secret files: " + result.1.joined(separator: ", ")
-      } catch { commitNote = String(describing: error) }
+      } catch { if token == commitGeneration { commitNote = String(describing: error) } }
     }
   }
   func commit() {
-    guard let repo = fleet?.repoPath, let branch = fleet?.branch, !committing else { return }
+    guard let captured = commitContext, captured == context(for: fleet), !committing,
+      !loadingChanges
+    else { return }
+    let repo = captured.repo
+    let branch = captured.branch
+    guard let checkoutPaths = claim([repo]) else { return }
     committing = true
     let paths = files.filter { included.contains($0.path) }.map(\.path)
     let message = message
+    let token = commitGeneration
     Task {
-      defer { committing = false }
       do {
         let hash = try await Task.detached {
           try Commit.commitAndPush(repo: repo, branch: branch, paths: paths, message: message)
         }.value
-        commitNote = "Pushed " + hash
-        files = []
-        included = []
-        await poll()
-      } catch { commitNote = String(describing: error) }
+        if token == commitGeneration {
+          commitNote = "Pushed " + hash
+          files = []
+          included = []
+        }
+      } catch { if token == commitGeneration { commitNote = String(describing: error) } }
+      committing = false
+      mutatingCheckouts.subtract(checkoutPaths)
+      await poll()
     }
   }
 }
