@@ -99,9 +99,19 @@ import Observation
     guard let machine = fleet?.machines[name] else { return .noAgent }
     return (observations[name] ?? LiveReport()).status(machine: machine, drift: drift)
   }
-  func comparisonNote(_ name: String) -> String? {
+  func detailsReport(_ name: String, now: Date = Date()) -> AgentStatus? {
+    observations[name]?.freshReport(now: now)
+  }
+  func missingChanges(_ name: String, now: Date = Date()) -> String? {
+    guard let report = detailsReport(name, now: now),
+      report.probes.revision.isFresh(now: report.agent.now),
+      let revision = report.probes.revision.value
+    else { return nil }
+    return changes[revision.rev]
+  }
+  func comparisonNote(_ name: String, now: Date = Date()) -> String? {
     guard fleet?.machines[name]?.sync != nil else { return nil }
-    guard let report = observations[name]?.report,
+    guard let report = detailsReport(name, now: now),
       report.probes.revision.isFresh(now: report.agent.now),
       let revision = report.probes.revision.value
     else {

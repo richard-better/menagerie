@@ -157,9 +157,7 @@ struct FleetView: View {
         case "changes":
           ScrollView {
             Text(
-              model.observations[model.selected]?.report?.probes.revision.value.flatMap {
-                model.changes[$0.rev]
-              } ?? "No known missing commits"
+              model.missingChanges(model.selected) ?? "No known missing commits"
             ).frame(maxWidth: .infinity, alignment: .leading).textSelection(.enabled)
           }
         case "log": log
@@ -212,7 +210,7 @@ struct FleetView: View {
           Text(
             machineSubtitle(
               machine,
-              uptime: model.observations[model.selected]?.report?.probes.system.value?.uptimeS)
+              uptime: model.detailsReport(model.selected)?.probes.system.value?.uptimeS)
           )
           .font(.caption).foregroundStyle(Palette.muted)
         }
@@ -220,7 +218,7 @@ struct FleetView: View {
         VStack(alignment: .trailing, spacing: 8) {
           Text(model.status(model.selected).label).font(.title).monospacedDigit().foregroundStyle(
             model.status(model.selected).needsSync ? Palette.amber : Palette.ink)
-          if let report = model.observations[model.selected]?.report,
+          if let report = model.detailsReport(model.selected),
             report.probes.revision.isFresh(now: report.agent.now),
             let revision = report.probes.revision.value
           {
@@ -251,7 +249,7 @@ struct FleetView: View {
         Text(note).font(.callout).foregroundStyle(Palette.amber).textSelection(.enabled)
           .fixedSize(horizontal: false, vertical: true)
       }
-      if let report = model.observations[model.selected]?.freshReport() {
+      if let report = model.detailsReport(model.selected) {
         VStack(alignment: .leading) {
           HStack {
             Text("Load").fontWeight(.medium)
