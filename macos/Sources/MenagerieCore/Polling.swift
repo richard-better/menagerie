@@ -207,7 +207,7 @@ public enum Poller {
           "/usr/bin/git",
           [
             "-C", repo, "fetch", "--quiet", "--no-write-fetch-head", "origin", "--end-of-options",
-            fleet.branch,
+            "refs/heads/" + fleet.branch + ":refs/remotes/origin/" + fleet.branch,
           ], timeout: 30)
       )
     }.value

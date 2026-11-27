@@ -3,7 +3,7 @@ import Testing
 
 @testable import MenagerieCore
 
-@Test func backgroundFetchPreservesDeploymentFetchHead() async throws {
+@Test func backgroundFetchUpdatesBranchDespiteSameNamedTagAndPreservesFetchHead() async throws {
   let repo = try Repository()
   let remote = try Repository()
   let other = try Repository()
@@ -23,7 +23,9 @@ import Testing
   _ = try Runner.git(other.path, ["fetch", "-q", "origin"])
   _ = try Runner.git(other.path, ["reset", "--hard", "origin/main"])
   _ = try Runner.git(other.path, ["commit", "-q", "--allow-empty", "-m", "next"])
-  _ = try Runner.git(other.path, ["push", "-q", "origin", "main"])
+  _ = try Runner.git(other.path, ["tag", "main", "HEAD~1"])
+  _ = try Runner.git(
+    other.path, ["push", "-q", "origin", "HEAD:refs/heads/main", "refs/tags/main"])
   let head = try Runner.git(other.path, ["rev-parse", "HEAD"])
   let fleet = try Fleet.parse("version: 1\nrepo: '\(repo.path)'\nmachines: {}")
   await Poller.fetch(fleet)
