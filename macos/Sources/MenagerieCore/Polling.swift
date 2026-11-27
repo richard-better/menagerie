@@ -48,13 +48,15 @@ public enum Poller {
     case agent(String, LiveReport)
     case service(String, String)
   }
-  private static func get(_ url: String) async throws -> (Data, HTTPURLResponse) {
+  private static func get(_ url: String, session: URLSession) async throws -> (
+    Data, HTTPURLResponse
+  ) {
     guard let url = URL(string: url) else { throw FleetError("Invalid URL") }
     var request = URLRequest(
       url: url, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: 3)
     request.httpMethod = "GET"
     // Incremental reads bound untrusted agent responses before decoding.
-    let (bytes, response) = try await URLSession.shared.bytes(for: request)
+    let (bytes, response) = try await session.bytes(for: request)
     guard let response = response as? HTTPURLResponse, (200..<300).contains(response.statusCode)
     else { throw FleetError("HTTP request failed") }
     var data = Data()
@@ -64,7 +66,9 @@ public enum Poller {
     }
     return (data, response)
   }
-  public static func poll(_ fleet: Fleet, known: [String: LiveReport]) async -> PollResult {
+  public static func poll(
+    _ fleet: Fleet, known: [String: LiveReport], session: URLSession = .shared
+  ) async -> PollResult {
     var result = PollResult()
     await withTaskGroup(of: Response.self) { group in
       for (name, machine) in fleet.machines {
@@ -72,7 +76,8 @@ public enum Poller {
           group.addTask {
             do {
               let (data, _) = try await get(
-                agent.trimmingCharacters(in: CharacterSet(charactersIn: "/")) + "/status")
+                agent.trimmingCharacters(in: CharacterSet(charactersIn: "/")) + "/status",
+                session: session)
               return .agent(
                 name,
                 LiveReport(
@@ -90,7 +95,7 @@ public enum Poller {
             group.addTask {
               let start = Date()
               do {
-                _ = try await get(url)
+                _ = try await get(url, session: session)
                 return .service(
                   "\(name)/\(index)", "up · \(Int(Date().timeIntervalSince(start) * 1000)) ms")
               } catch {
