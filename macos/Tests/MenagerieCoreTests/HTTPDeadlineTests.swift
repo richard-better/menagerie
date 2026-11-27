@@ -8,7 +8,7 @@ import Testing
 private final class SlowHTTPServer {
   let descriptor: Int32
   let url: String
-  init() throws {
+  init(headerDelay: useconds_t = 0) throws {
     let fd = socket(AF_INET, SOCK_STREAM, 0)
     descriptor = fd
     guard descriptor >= 0 else { throw FleetError("socket") }
@@ -35,6 +35,7 @@ private final class SlowHTTPServer {
       setsockopt(client, SOL_SOCKET, SO_NOSIGPIPE, &one, socklen_t(MemoryLayout<Int32>.size))
       var request = [UInt8](repeating: 0, count: 4096)
       _ = read(client, &request, request.count)
+      usleep(headerDelay)
       let headers = Array(
         "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 10000\r\nConnection: close\r\n\r\n"
           .utf8)
@@ -113,4 +114,18 @@ private actor HTTPGate {
       return PollResult()
     })
   #expect(published.withLock { $0 })
+}
+
+@Test func serviceHeadersHaveATotalDeadline() async throws {
+  let server = try SlowHTTPServer(headerDelay: 800000)
+  let session = URLSession(configuration: .ephemeral)
+  defer { session.invalidateAndCancel() }
+  let fleet = try Fleet.parse(
+    "version: 1\nmachines: {test: {services: [{name: slow, url: '\(server.url)', health: '\(server.url)'}]}}"
+  )
+  let start = Date()
+  let result = await Poller.poll(
+    fleet, known: [:], session: session, healthDeadline: .milliseconds(100))
+  #expect(result.health["test/0"]?.contains("total deadline") == true)
+  #expect(Date().timeIntervalSince(start) < 0.7)
 }

@@ -82,7 +82,18 @@ public enum Poller {
       return try await group.next()!
     }
   }
-  private static func health(_ url: String, session: URLSession) async throws {
+  private static func health(_ url: String, session: URLSession, deadline: Duration) async throws {
+    try await withThrowingTaskGroup(of: Void.self) { group in
+      group.addTask { try await healthHeaders(url, session: session) }
+      group.addTask {
+        try await Task.sleep(for: deadline)
+        throw FleetError("Service request exceeded total deadline")
+      }
+      defer { group.cancelAll() }
+      try await group.next()!
+    }
+  }
+  private static func healthHeaders(_ url: String, session: URLSession) async throws {
     guard let url = URL(string: url) else { throw FleetError("Invalid URL") }
     let (bytes, response) = try await session.bytes(
       for: URLRequest(url: url, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: 3))
@@ -93,7 +104,7 @@ public enum Poller {
 
   public static func poll(
     _ fleet: Fleet, known: [String: LiveReport], session: URLSession = .shared,
-    agentDeadline: Duration = .seconds(3),
+    agentDeadline: Duration = .seconds(3), healthDeadline: Duration = .seconds(3),
     onHealth: @Sendable ([String: String]) async -> Void = { _ in },
     comparison: @Sendable (Fleet, [String: LiveReport], [String: LiveReport]) async -> PollResult =
       compare
@@ -124,11 +135,13 @@ public enum Poller {
             group.addTask {
               let start = Date()
               do {
-                try await Self.health(url, session: session)
+                try await Self.health(url, session: session, deadline: healthDeadline)
                 return .service(
                   "\(name)/\(index)", "up · \(Int(Date().timeIntervalSince(start) * 1000)) ms")
               } catch {
-                return .service("\(name)/\(index)", "down · \(error.localizedDescription)")
+                return .service(
+                  "\(name)/\(index)",
+                  "down · \((error as? FleetError)?.description ?? error.localizedDescription)")
               }
             }
           }
