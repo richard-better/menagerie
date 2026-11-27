@@ -141,6 +141,16 @@ public enum Commit {
     }
     return message
   }
+  static func uncommittedCount(repo: String, cancel: Cancellation) throws -> Int {
+    try Runner.git(
+      repo,
+      [
+        "-c", "status.renames=false", "status", "--porcelain=v1", "-z", "--untracked-files=all",
+        "--ignore-submodules=none",
+      ], cancel: cancel
+    )
+    .split(separator: "\0").count
+  }
   public static func pushCheckout(
     repo: String, branch: String, cancel: Cancellation, output: @Sendable (String) -> Void
   ) throws {
@@ -148,7 +158,7 @@ public enum Commit {
       try Runner.git(repo, ["symbolic-ref", "--quiet", "HEAD"], cancel: cancel).trimmingCharacters(
         in: .whitespacesAndNewlines) == "refs/heads/" + branch
     else { throw FleetError("Checkout is not on the configured branch") }
-    let count = try changes(repo: repo).count
+    let count = try uncommittedCount(repo: repo, cancel: cancel)
     if count > 0 {
       output(
         "\(count) uncommitted \(count == 1 ? "file stays" : "files stay") behind: Sync deploys commits only.\n"
