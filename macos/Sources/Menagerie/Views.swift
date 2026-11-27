@@ -39,46 +39,55 @@ struct FleetPopover: View {
     VStack(spacing: 0) {
       ForEach(model.fleet?.order ?? [], id: \.self) { name in
         if let machine = model.fleet?.machines[name] {
-          HStack(spacing: 12) {
-            Button {
-              model.selected = name
-              model.page = "details"
-              open()
-            } label: {
-              HStack(spacing: 10) {
-                Image(systemName: symbol(machine)).font(.title2).frame(width: 32)
-                VStack(alignment: .leading, spacing: 4) {
-                  HStack {
-                    StatusDot(status: model.status(name))
-                    Text(name).fontWeight(.medium)
+          // The status or Sync button stays on the far right of every row;
+          // services get their own row under the name, so neither squeezes it.
+          VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 12) {
+              Button {
+                model.selected = name
+                model.page = "details"
+                open()
+              } label: {
+                HStack(spacing: 10) {
+                  Image(systemName: symbol(machine)).font(.title2).frame(width: 32)
+                  VStack(alignment: .leading, spacing: 4) {
+                    HStack {
+                      StatusDot(status: model.status(name))
+                      Text(name).fontWeight(.medium).lineLimit(1)
+                    }
+                    Text(machine.role ?? "").font(.caption).foregroundStyle(Palette.muted)
+                      .lineLimit(1)
+                    if let job = model.jobs[name], !job.running, let result = job.result {
+                      Text(result).font(.caption).foregroundStyle(
+                        result == "Succeeded" ? Palette.green : Palette.amber
+                      ).lineLimit(2).help(result)
+                    }
                   }
-                  Text(machine.role ?? "").font(.caption).foregroundStyle(Palette.muted)
-                  if let job = model.jobs[name], !job.running, let result = job.result {
-                    Text(result).font(.caption).foregroundStyle(
-                      result == "Succeeded" ? Palette.green : Palette.amber
-                    ).lineLimit(2).help(result)
-                  }
+                }.frame(maxWidth: .infinity, alignment: .leading).contentShape(Rectangle())
+              }.buttonStyle(.plain)
+              if let job = model.jobs[name], job.running {
+                VStack(spacing: 4) {
+                  Text("Syncing…").font(.caption)
+                  Button("Cancel") { job.cancel.cancel() }.buttonStyle(.glass)
                 }
-              }.frame(maxWidth: .infinity, alignment: .leading).contentShape(Rectangle())
-            }.buttonStyle(.plain)
-            if let job = model.jobs[name], job.running {
-              VStack(spacing: 4) {
-                Text("Syncing…").font(.caption)
-                Button("Cancel") { job.cancel.cancel() }.buttonStyle(.glass)
+              } else if model.status(name).needsSync {
+                Button(model.status(name).label, systemImage: "arrow.trianglehead.2.clockwise") {
+                  model.deploy(name, action: .sync)
+                }.buttonStyle(.glass).disabled(model.jobs[name]?.running == true)
+              } else {
+                Text(model.status(name).label).font(.caption).foregroundStyle(Palette.muted)
               }
-            } else if model.status(name).needsSync {
-              Button(model.status(name).label, systemImage: "arrow.trianglehead.2.clockwise") {
-                model.deploy(name, action: .sync)
-              }.buttonStyle(.glass).disabled(model.jobs[name]?.running == true)
-            } else {
-              Text(model.status(name).label).font(.caption).foregroundStyle(Palette.muted)
             }
-            HStack(spacing: 4) {
-              ForEach(Array(machine.services.enumerated()), id: \.offset) { _, service in
-                if let url = URL(string: service.url) {
-                  Link(destination: url) { ServiceIcon(service: service) }.help(service.name)
+            if !machine.services.isEmpty {
+              HStack(spacing: 4) {
+                ForEach(Array(machine.services.enumerated()), id: \.offset) { _, service in
+                  if let url = URL(string: service.url) {
+                    Link(destination: url) { ServiceIcon(service: service) }.help(service.name)
+                  }
                 }
               }
+              // Under the name: the device icon's 32 pt plus 10 pt spacing.
+              .padding(.leading, 42)
             }
           }.padding(14)
         }
