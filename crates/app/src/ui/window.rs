@@ -13,8 +13,9 @@ use menagerie_protocol as protocol;
 use crate::assets::icon;
 use crate::store::{Health, Status, Store};
 use crate::theme;
+use crate::ui::commit::{CommitPage, Committed};
 use crate::ui::widgets::{
-    device_glyph, dot_chart, icon_button, meter, service_icon, status_dot, text_button,
+    device_glyph, dot_chart, icon_button, meter, page_bar, service_icon, status_dot, text_button,
 };
 
 /// How much load history the chart shows.
@@ -54,6 +55,8 @@ pub struct FleetWindow {
     >,
     /// Machines whose panel shows their shell instead of their details.
     in_terminal: std::collections::HashSet<String>,
+    /// Committing the checkout's changes, shown in place of the panel.
+    commit_page: Option<(Entity<CommitPage>, Subscription)>,
     _observe: Subscription,
     /// Re-renders every few seconds so "Updated 8s ago" stays true.
     _ticker: Task<()>,
@@ -89,6 +92,7 @@ impl FleetWindow {
             show_more: false,
             terminals: std::collections::HashMap::new(),
             in_terminal: std::collections::HashSet::new(),
+            commit_page: None,
             _observe: observe,
             _ticker: ticker,
         }
@@ -97,6 +101,7 @@ impl FleetWindow {
     fn titlebar(&self, store: &Store, cx: &Context<Self>) -> impl IntoElement {
         let refresh = self.store.clone();
         let edit = self.store.clone();
+        let dirty = matches!(&store.checkout, Some(Ok(co)) if co.dirty);
         let checkout = match &store.checkout {
             Some(Ok(co)) => {
                 let mut parts = Vec::new();
@@ -125,11 +130,23 @@ impl FleetWindow {
             .when_some(checkout, |el, text| {
                 el.child(
                     div()
+                        .id("checkout")
                         .text_size(px(11.5))
                         .text_color(theme::mute())
                         .mr(px(10.))
                         .truncate()
-                        .child(text),
+                        .child(text)
+                        // Uncommitted changes: a click opens the commit page.
+                        .when(dirty, |el| {
+                            el.cursor_pointer()
+                                .hover(|s| s.text_color(theme::ink()))
+                                .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| {
+                                    cx.stop_propagation()
+                                })
+                                .on_click(cx.listener(|this, _, window, cx| {
+                                    this.open_commit_page(window, cx)
+                                }))
+                        }),
                 )
             })
             .child(
@@ -317,42 +334,39 @@ impl FleetWindow {
             crate::sync::Place::Here => "this Mac".to_owned(),
             crate::sync::Place::Ssh(to) => format!("ssh {to}"),
         };
-        div()
-            .flex_none()
-            .h(px(44.))
-            .flex()
-            .items_center()
-            .gap(px(10.))
-            .px(px(12.))
-            .border_b_1()
-            .border_color(theme::line())
-            .child(icon_button("back", icon::BACK, 26., move |_, _, cx| {
-                let _ = back.update(cx, |this, cx| this.leave_terminal(&target, cx));
-            }))
-            .child(
-                div()
-                    .text_size(px(13.))
-                    .font_weight(FontWeight::BOLD)
-                    .child(name.to_owned()),
-            )
-            .child(
-                div()
-                    .flex_1()
-                    .font_family(theme::MONO)
-                    .text_size(px(11.))
-                    .text_color(theme::mute())
-                    .truncate()
-                    .child(place),
-            )
-            .child(
-                text_button("end-session", "End session", true).on_click(cx.listener(
-                    move |this, _, _, cx| {
-                        this.in_terminal.remove(&end);
-                        this.terminals.remove(&end);
-                        cx.notify();
-                    },
-                )),
-            )
+        page_bar(name.to_owned(), place, move |_, _, cx| {
+            let _ = back.update(cx, |this, cx| this.leave_terminal(&target, cx));
+        })
+        .child(
+            text_button("end-session", "End session", true).on_click(cx.listener(
+                move |this, _, _, cx| {
+                    this.in_terminal.remove(&end);
+                    this.terminals.remove(&end);
+                    cx.notify();
+                },
+            )),
+        )
+    }
+
+    /// Show the page that commits the checkout's changes.
+    fn open_commit_page(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let store = self.store.read(cx);
+        let Some(fleet) = &store.fleet else {
+            return;
+        };
+        let Some(repo) = fleet.repo_path() else {
+            return;
+        };
+        let branch = fleet.branch().to_owned();
+        let command = fleet.commit_message.clone();
+        let page = cx.new(|cx| CommitPage::new(repo, branch, command, window, cx));
+        let done = cx.subscribe(&page, |this: &mut Self, _, _: &Committed, cx| {
+            this.commit_page = None;
+            this.store.read(cx).refresh();
+            cx.notify();
+        });
+        self.commit_page = Some((page, done));
+        cx.notify();
     }
 
     /// Back to the details. The shell keeps running unless it has ended.
@@ -748,7 +762,38 @@ impl Render for FleetWindow {
 
         if has_machines {
             root = root.child(self.strip(store, cx));
-            if let Some((name, machine)) = selected {
+            if let Some((page, _)) = &self.commit_page {
+                let back = cx.entity().downgrade();
+                let repo = store
+                    .fleet
+                    .as_ref()
+                    .and_then(|f| f.repo.clone())
+                    .unwrap_or_default();
+                root = root.child(
+                    div()
+                        .flex_1()
+                        .min_h_0()
+                        .flex()
+                        .flex_col()
+                        .border_t_1()
+                        .border_color(theme::line())
+                        .bg(theme::panel())
+                        .child(page_bar("Commit changes", repo, move |_, _, cx| {
+                            let _ = back.update(cx, |this, cx| {
+                                this.commit_page = None;
+                                cx.notify();
+                            });
+                        }))
+                        .child(
+                            div()
+                                .id("commit-page")
+                                .flex_1()
+                                .min_h_0()
+                                .overflow_y_scroll()
+                                .child(page.clone()),
+                        ),
+                );
+            } else if let Some((name, machine)) = selected {
                 let panel = div()
                     .id("panel")
                     .flex_1()

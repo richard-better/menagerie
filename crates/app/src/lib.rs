@@ -9,6 +9,7 @@ use gpui::{
 };
 
 pub mod assets;
+pub mod commit;
 pub mod live;
 pub mod platform;
 pub mod store;
@@ -16,7 +17,9 @@ pub mod sync;
 pub mod terminal;
 pub mod theme;
 pub mod ui {
+    pub mod commit;
     pub mod popover;
+    pub mod text_field;
     pub mod widgets;
     pub mod window;
 }

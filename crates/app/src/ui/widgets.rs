@@ -203,6 +203,40 @@ pub fn icon_button(
         )
 }
 
+/// The bar above a page that takes over the panel: back, a title, and a
+/// detail such as where the page's work happens.
+pub fn page_bar(
+    title: impl Into<SharedString>,
+    detail: impl Into<SharedString>,
+    on_back: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
+) -> Div {
+    div()
+        .flex_none()
+        .h(px(44.))
+        .flex()
+        .items_center()
+        .gap(px(10.))
+        .px(px(12.))
+        .border_b_1()
+        .border_color(theme::line())
+        .child(icon_button("back", crate::assets::icon::BACK, 26., on_back))
+        .child(
+            div()
+                .text_size(px(13.))
+                .font_weight(gpui::FontWeight::BOLD)
+                .child(title.into()),
+        )
+        .child(
+            div()
+                .flex_1()
+                .font_family(theme::MONO)
+                .text_size(px(11.))
+                .text_color(theme::mute())
+                .truncate()
+                .child(detail.into()),
+        )
+}
+
 /// A text button. Disabled buttons are drawn at reduced contrast and do
 /// nothing.
 pub fn text_button(

@@ -323,7 +323,7 @@ fn checkout(repo: &Path, upstream: &str) -> Result<Checkout, String> {
         repo,
         &["rev-list", "--left-right", "--count", &range],
     )?)?;
-    let dirty = !git(repo, &["status", "--porcelain", "--untracked-files=no"])?.is_empty();
+    let dirty = !git(repo, &["status", "--porcelain", "--untracked-files=normal"])?.is_empty();
     Ok(Checkout {
         unpushed,
         unpulled,
