@@ -94,8 +94,15 @@ pub fn system_info() -> Result<SystemInfo, String> {
     })
 }
 
-/// The hostname without macOS's `.local` mDNS suffix.
+/// The machine's name: `$MENAGERIE_AGENT_HOSTNAME` if set, for containers,
+/// whose own name isn't the machine's; else the system's, without `.local`.
 pub fn host_name() -> String {
+    if let Some(name) = std::env::var("MENAGERIE_AGENT_HOSTNAME")
+        .ok()
+        .filter(|n| !n.trim().is_empty())
+    {
+        return name.trim().to_owned();
+    }
     let name = System::host_name().unwrap_or_else(|_| "unknown".to_owned());
     name.strip_suffix(".local")
         .map(str::to_owned)
