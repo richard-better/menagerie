@@ -203,10 +203,11 @@ pub fn plan(action: Action, fleet: &Fleet, name: &str, place: &Place) -> Result<
                  if [ \"$(git symbolic-ref --quiet HEAD)\" != {head} ]; then\n\
                  \x20 echo \"The checkout on this machine isn't on the configured branch.\" >&2; exit 1\n\
                  fi\n\
-                 git pull --ff-only origin {pull} || exit 1\n\
+                 {}\n\
                  {FLAKE_AT_HEAD}\n\
                  {rebuild}",
-                sh_path(&repo)
+                sh_path(&repo),
+                fast_forward(&pull),
             )
         }
         Action::Rollback => format!("cd {} && {rebuild}", sh_path(&repo)),
@@ -240,6 +241,14 @@ pub fn plan(action: Action, fleet: &Fleet, name: &str, place: &Place) -> Result<
     step.askpass = *place == Place::Here && rebuild.contains("sudo -A");
     steps.push(step);
     Ok(steps)
+}
+
+/// Fast-forward the checkout to `refspec` on origin. Not `git pull`: that
+/// follows the machine's `pull.rebase`, and a rebase refuses to run with
+/// uncommitted changes even when there is nothing to pull. A fast-forward
+/// merge only minds changes to the files it updates.
+fn fast_forward(refspec: &str) -> String {
+    format!("git fetch origin {refspec} || exit 1\ngit merge --ff-only FETCH_HEAD || exit 1")
 }
 
 /// Sets `$flake` to the checkout (the current directory) at its HEAD
@@ -681,7 +690,7 @@ mod tests {
         );
         assert!(script.contains("!= 'refs/heads/main' ]"), "{script}");
         assert!(
-            script.contains("git pull --ff-only origin 'refs/heads/main' || exit 1\n"),
+            script.contains(&format!("{}\n", fast_forward("'refs/heads/main'"))),
             "{script}"
         );
         assert!(
@@ -703,7 +712,10 @@ mod tests {
         assert_eq!(step.args[6], "richard@richard-hp-server");
         let remote = &step.args[7];
         assert!(remote.starts_with("sh -lc 'cd ~/"), "{remote}");
-        assert!(remote.contains("git pull --ff-only origin"), "{remote}");
+        assert!(
+            remote.contains("git merge --ff-only FETCH_HEAD"),
+            "{remote}"
+        );
         assert!(remote.contains("home-manager switch --flake"), "{remote}");
         assert!(remote.contains("#richard@richard-hp-server"), "{remote}");
         assert!(remote.contains("?rev=$(git rev-parse HEAD)"), "{remote}");
@@ -893,6 +905,54 @@ mod tests {
             .output()
             .unwrap();
         assert_eq!(String::from_utf8_lossy(&pushed.stdout).trim(), "two");
+    }
+
+    /// With `pull.rebase` set and a dirty tree, `git pull` refuses even when
+    /// there is nothing to pull; the fast-forward goes ahead.
+    #[test]
+    fn fast_forwards_past_pull_rebase_and_a_dirty_tree() {
+        let dir = tempfile::tempdir().unwrap();
+        let origin = dir.path().join("origin.git");
+        let (a, b) = (dir.path().join("a"), dir.path().join("b"));
+        let o = origin.to_str().unwrap();
+        git(dir.path(), &["init", "-q", "--bare", "-b", "main", o]);
+        for work in [&a, &b] {
+            git(dir.path(), &["clone", "-q", o, work.to_str().unwrap()]);
+            git(work, &["config", "commit.gpgsign", "false"]);
+            git(work, &["config", "pull.rebase", "true"]);
+        }
+        std::fs::write(a.join("tool.json"), "{}\n").unwrap();
+        git(&a, &["add", "-A"]);
+        git(&a, &["commit", "-q", "-m", "one"]);
+        git(&a, &["push", "-q", "origin", "HEAD:main"]);
+        git(&b, &["pull", "-q", "origin", "main"]);
+        // b's tool rewrites its settings; a pushes another change.
+        std::fs::write(b.join("tool.json"), "{\"edited\": true}\n").unwrap();
+        std::fs::write(a.join("other.nix"), "{ }\n").unwrap();
+        git(&a, &["add", "-A"]);
+        git(&a, &["commit", "-q", "-m", "two"]);
+        git(&a, &["push", "-q", "origin", "HEAD:main"]);
+        let run = || {
+            Command::new("/bin/sh")
+                .current_dir(&b)
+                .args(["-c", &fast_forward("'refs/heads/main'")])
+                .output()
+                .unwrap()
+        };
+        let out = run();
+        assert!(
+            out.status.success(),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        assert!(b.join("other.nix").exists());
+        assert_eq!(
+            std::fs::read_to_string(b.join("tool.json")).unwrap(),
+            "{\"edited\": true}\n",
+            "the uncommitted edit stays"
+        );
+        // Nothing new: still fine.
+        assert!(run().status.success());
     }
 
     #[test]
