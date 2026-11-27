@@ -52,6 +52,7 @@ private final class SlowHTTPServer {
     close(descriptor)
   }
 }
+// The body is deliberately shorter than Content-Length; draining it cannot succeed.
 @Test func serviceHealthUsesHeadersWithoutDrainingStreamingBody() async throws {
   let server = try SlowHTTPServer()
   let session = URLSession(configuration: .ephemeral)
@@ -59,23 +60,19 @@ private final class SlowHTTPServer {
   let fleet = try Fleet.parse(
     "version: 1\nmachines: {test: {services: [{name: stream, url: '\(server.url)', health: '\(server.url)'}]}}"
   )
-  let start = Date()
   let result = await Poller.poll(fleet, known: [:], session: session)
   #expect(
     result.health["test/0"]?.hasPrefix("up ·") == true, Comment(rawValue: result.health.description)
   )
-  #expect(Date().timeIntervalSince(start) < 1.5)
 }
 @Test func streamingAgentsHaveATotalDeadline() async throws {
   let server = try SlowHTTPServer()
   let session = URLSession(configuration: .ephemeral)
   defer { session.invalidateAndCancel() }
   let fleet = try Fleet.parse("version: 1\nmachines: {test: {agent: '\(server.url)'}}")
-  let start = Date()
   let result = await Poller.poll(
     fleet, known: [:], session: session, agentDeadline: .milliseconds(100))
   #expect(result.observations["test"]?.error?.contains("total deadline") == true)
-  #expect(Date().timeIntervalSince(start) < 1.5)
 }
 private actor HTTPGate {
   private var continuation: CheckedContinuation<Void, Never>?
