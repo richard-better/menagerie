@@ -43,6 +43,7 @@ app=target/Menagerie.app
 rm -rf "$app"
 mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
 cp "$bin/Menagerie" "$app/Contents/MacOS/Menagerie"
+cp target/ghostty/bin/MenageriePTYHost "$app/Contents/MacOS/MenageriePTYHost"
 cp assets/brand/menubar.png "$app/Contents/Resources/menubar.png"
 cp examples/fleet.yaml "$app/Contents/Resources/fleet-example.yaml"
 cp assets/brand/Menagerie.icns "$app/Contents/Resources/Menagerie.icns"
@@ -66,6 +67,7 @@ cat >"$app/Contents/Info.plist" <<EOF
 </plist>
 EOF
 
+codesign --force --options runtime --timestamp --sign "$identity" "$app/Contents/MacOS/MenageriePTYHost"
 codesign --force --options runtime --timestamp --sign "$identity" "$app"
 codesign --verify --strict --verbose=1 "$app"
 echo "Signed $app with $identity"

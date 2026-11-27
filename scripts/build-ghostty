@@ -7,6 +7,10 @@ out="$root/target/ghostty"
 src="$root/target/ghostty-src"
 arch=$(uname -m)
 stamp="$rev zig-0.17.1 $arch macos-27.0 ReleaseFast"
+mkdir -p "$out/bin"
+if [ ! -x "$out/bin/MenageriePTYHost" ] || [ "$root/macos/Support/PTYHost.c" -nt "$out/bin/MenageriePTYHost" ]; then
+  xcrun clang -Wall -Wextra -Werror -O2 -mmacosx-version-min=27.0 "$root/macos/Support/PTYHost.c" -o "$out/bin/MenageriePTYHost"
+fi
 if [ -f "$out/build-stamp" ] && [ "$(cat "$out/build-stamp")" = "$stamp" ] && [ -f "$out/lib/libghostty-vt.a" ]; then exit 0; fi
 [ "$(cd "$root" && mise exec -- zig version)" = 0.17.1 ] || { echo 'Run mise install for Zig 0.17.1' >&2; exit 1; }
 if [ ! -d "$src/.git" ]; then

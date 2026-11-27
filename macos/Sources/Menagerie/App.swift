@@ -54,7 +54,7 @@ import SwiftUI
     guard !terminating else { return .terminateLater }
     terminating = true
     for job in model.jobs.values { job.cancel.cancel() }
-    for terminal in model.terminals.values { terminal.transport.stop() }
+    PTYSession.killAll()
     Task {
       try? await Task.sleep(for: .milliseconds(1200))
       let deadline = Date().addingTimeInterval(3)

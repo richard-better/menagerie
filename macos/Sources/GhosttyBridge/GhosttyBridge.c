@@ -6,6 +6,8 @@
 #include <fcntl.h>
 #include <limits.h>
 #include <spawn.h>
+#include <signal.h>
+
 #include <sys/ioctl.h>
 #include <sys/wait.h>
 #include <unistd.h>
@@ -112,11 +114,18 @@ int mg_pty_spawn(const char *program, char *const *argv, char *const *envp, cons
   char name[PATH_MAX];
   struct winsize size = {.ws_col = cols, .ws_row = rows};
   if (openpty(master, &slave, name, NULL, &size) != 0) return errno;
-  fcntl(*master, F_SETFD, FD_CLOEXEC); fcntl(slave, F_SETFD, FD_CLOEXEC);
-  fcntl(*master, F_SETFL, O_NONBLOCK); fcntl(*master, F_SETNOSIGPIPE, 1);
+  if (fcntl(*master, F_SETFD, FD_CLOEXEC) < 0 || fcntl(slave, F_SETFD, FD_CLOEXEC) < 0 ||
+      fcntl(*master, F_SETFL, O_NONBLOCK) < 0 || fcntl(*master, F_SETNOSIGPIPE, 1) < 0) {
+    int error = errno; close(*master); close(slave); *master = -1; return error;
+  }
   posix_spawnattr_t attr; posix_spawn_file_actions_t actions;
   posix_spawnattr_init(&attr); posix_spawn_file_actions_init(&actions);
-  posix_spawnattr_setflags(&attr, POSIX_SPAWN_SETSID | POSIX_SPAWN_CLOEXEC_DEFAULT);
+  sigset_t defaults, mask;
+  sigemptyset(&defaults); sigemptyset(&mask);
+  int signals[] = {SIGHUP, SIGINT, SIGQUIT, SIGTERM, SIGPIPE, SIGCHLD, SIGTTIN, SIGTTOU, SIGTSTP};
+  for (size_t i = 0; i < sizeof(signals) / sizeof(signals[0]); i++) sigaddset(&defaults, signals[i]);
+  posix_spawnattr_setsigdefault(&attr, &defaults); posix_spawnattr_setsigmask(&attr, &mask);
+  posix_spawnattr_setflags(&attr, POSIX_SPAWN_SETSID | POSIX_SPAWN_CLOEXEC_DEFAULT | POSIX_SPAWN_SETSIGDEF | POSIX_SPAWN_SETSIGMASK);
   posix_spawn_file_actions_addopen(&actions, 0, name, O_RDWR, 0);
   posix_spawn_file_actions_adddup2(&actions, 0, 1); posix_spawn_file_actions_adddup2(&actions, 0, 2);
   if (directory) posix_spawn_file_actions_addchdir(&actions, directory);
