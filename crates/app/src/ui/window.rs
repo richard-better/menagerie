@@ -940,6 +940,9 @@ fn notice(store: &Store, name: &str, machine: &Machine, status: Status) -> Optio
             .unwrap_or_default();
         return Some(format!("No answer from the agent at {url}{why}"));
     }
+    // Nothing to compare for a machine Menagerie doesn't sync, such as one
+    // that isn't built from the repo at all.
+    machine.sync.as_ref()?;
     let Some(revision) = store.revision(name) else {
         return Some(
             "This machine doesn't report which commit built it. Rebuild it from a configuration that sets `system.configurationRevision`."
