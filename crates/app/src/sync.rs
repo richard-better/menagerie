@@ -360,13 +360,15 @@ fn run_step(step: &Step, events: &Sender<Event>, cancel: &Cancel) -> Result<(), 
     };
     let stdout = child.stdout.take();
     let stderr = child.stderr.take();
-    std::thread::scope(|scope| {
-        if let Some(out) = stdout {
-            scope.spawn(|| forward(out, events));
-        }
-        if let Some(err) = stderr {
-            scope.spawn(|| forward(err, events));
-        }
+    // The last thing the step said on stderr (else stdout) is usually why
+    // it failed, so it goes in the failure message.
+    let (last_out, last_err) = std::thread::scope(|scope| {
+        let out = stdout.map(|out| scope.spawn(|| forward(out, events)));
+        let err = stderr.map(|err| scope.spawn(|| forward(err, events)));
+        let join = |h: Option<std::thread::ScopedJoinHandle<'_, Option<String>>>| {
+            h.and_then(|h| h.join().ok()).flatten()
+        };
+        (join(out), join(err))
     });
     let group = child.id();
     let status = child.wait().map_err(|e| format!("{}: {e}", step.label));
@@ -383,14 +385,24 @@ fn run_step(step: &Step, events: &Sender<Event>, cancel: &Cancel) -> Result<(), 
     if status.success() {
         Ok(())
     } else {
-        Err(format!("{} failed ({status})", step.label))
+        Err(match last_err.or(last_out) {
+            Some(why) => format!("{} failed: {why}", step.label),
+            None => format!("{} failed ({status})", step.label),
+        })
     }
 }
 
-fn forward(stream: impl std::io::Read, events: &Sender<Event>) {
+/// Send each line on, and return the last non-empty one.
+fn forward(stream: impl std::io::Read, events: &Sender<Event>) -> Option<String> {
+    let mut last = None;
     for line in BufReader::new(stream).lines().map_while(Result::ok) {
-        let _ = events.send(Event::Line(strip_ansi(&line)));
+        let line = strip_ansi(&line);
+        if !line.trim().is_empty() {
+            last = Some(line.trim().to_owned());
+        }
+        let _ = events.send(Event::Line(line));
     }
+    last
 }
 
 /// Drop terminal colour codes, which would show as noise in the log.
@@ -712,6 +724,10 @@ mod tests {
         assert_eq!(sh_path("/srv/a b"), "'/srv/a b'");
     }
 
+    fn result_says(result: &Result<(), String>, text: &str) -> bool {
+        result.as_ref().is_err_and(|why| why.contains(text))
+    }
+
     fn git(dir: &Path, args: &[&str]) {
         let status = Command::new("git")
             .arg("-C")
@@ -765,6 +781,7 @@ mod tests {
         let (lines, result) = collect(steps);
         assert!(result.is_err());
         assert!(lines.iter().any(|l| l.contains("isn't on")), "{lines:?}");
+        assert!(result_says(&result, "isn't on"), "{result:?}");
         git(&work, &["switch", "-q", "main"]);
 
         // A tag named like the branch makes git abbreviate HEAD to
@@ -830,6 +847,6 @@ mod tests {
         assert!(lines.iter().any(|l| l == "bold"));
         assert!(!lines.iter().any(|l| l == "nope"));
         let why = result.unwrap_err();
-        assert!(why.starts_with("second failed"), "{why}");
+        assert_eq!(why, "second failed: bold");
     }
 }
