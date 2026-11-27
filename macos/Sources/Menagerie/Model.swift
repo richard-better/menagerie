@@ -29,7 +29,9 @@ import Observation
     }
     page = "terminal"
   }
-  private var generation = 0
+  private(set) var generation = 0
+  let fleetPath: String
+  init(path: String = Fleet.path) { fleetPath = path }
   private var started = false
   private var polling = false
   var attention: Int { fleet?.order.filter { status($0).needsSync }.count ?? 0 }
@@ -63,8 +65,9 @@ import Observation
     }
   }
   func reload() async {
+    let path = fleetPath
     let result = await Task.detached { () -> Result<Fleet, any Error> in
-      Result { try Fleet.parse(String(contentsOfFile: Fleet.path, encoding: .utf8)) }
+      Result { try Fleet.parse(String(contentsOfFile: path, encoding: .utf8)) }
     }.value
     switch result {
     case .success(let new):
@@ -92,12 +95,16 @@ import Observation
       error = String(describing: failure)
     }
   }
-  func poll() async {
+  func poll(
+    using fetch: @Sendable (Fleet, [String: LiveReport]) async -> PollResult = {
+      await Poller.poll($0, known: $1)
+    }
+  ) async {
     guard !polling, let fleet else { return }
     polling = true
     defer { polling = false }
     let generation = generation
-    let result = await Poller.poll(fleet, known: observations)
+    let result = await fetch(fleet, observations)
     guard generation == self.generation else { return }
     for (name, var observation) in result.observations {
       if observation.report == nil {
@@ -113,7 +120,7 @@ import Observation
     updated = Date()
   }
   func editFleet() {
-    let url = URL(fileURLWithPath: Fleet.path)
+    let url = URL(fileURLWithPath: fleetPath)
     do {
       if !FileManager.default.fileExists(atPath: url.path) {
         try FileManager.default.createDirectory(

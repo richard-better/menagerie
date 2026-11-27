@@ -23,5 +23,6 @@ let package = Package(
     .target(name: "MenagerieCore", dependencies: ["Yams", "AdminBridge", "GhosttyBridge"]),
     .executableTarget(name: "Menagerie", dependencies: ["MenagerieCore"]),
     .testTarget(name: "MenagerieCoreTests", dependencies: ["MenagerieCore"]),
+    .testTarget(name: "MenagerieModelTests", dependencies: ["Menagerie", "MenagerieCore"]),
   ]
 )
