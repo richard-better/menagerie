@@ -20,9 +20,7 @@ rustPlatform.buildRustPackage {
   };
   cargoLock = {
     lockFile = ../Cargo.lock;
-    # The app's terminal uses libghostty-vt from git. The agent doesn't build
-    # it, but vendoring the workspace's lockfile still needs its hash.
-    outputHashes."libghostty-vt-0.2.1" = "sha256-Wl/JOS2KD/s+fiUz5W2bgXt07gLhwWO9MkPWik/9/gs=";
+
   };
 
   cargoBuildFlags = [

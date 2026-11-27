@@ -1,8 +1,9 @@
 # Agent notes
 
-- Workspace: `crates/fleet` (fleet file model, no UI), `crates/app` (gpui app: `src/ui` views, `src/platform` macOS menu bar code, `src/bin/preview.rs`).
-- The plan and its decisions: `docs/plans/master-plan-v1.html`. UI judging rounds: `.ui-judge/`.
-- Check: `cargo fmt --all`, `cargo clippy --workspace --all-targets -- -D warnings`, `cargo test --workspace`. The app needs Zig 0.17 on PATH to build libghostty-vt: run cargo through `mise exec --` (see `mise.toml`). The published libghostty-vt 0.2.2 needs Zig 0.15, which can't link on macOS 27, so it comes from git, pinned by rev; changing the rev means updating `outputHashes` in `nix/agent.nix`.
-- To look at the UI, run `cargo run -p menagerie --bin preview -- target/preview` and read `target/preview/window.png` and `popover.png`. It calls `screencapture`, which fails inside a sandbox ("could not create image from rect"); run it outside the sandbox.
-- gpui 0.2.2 has no status item API, cannot move or hide a window after opening it, and forces a Dock icon; `src/platform` works around each through AppKit. Its `Display::bounds()` drops the origin, so monitor geometry comes from `display-info`.
-- Colours live in `crates/app/src/theme.rs`; colour only carries meaning (green healthy or charging, amber needs a sync).
+- Layout: `macos/` is the macOS 27 SwiftPM app. `MenagerieCore` owns fleet parsing, polling, Git, deployment, and cancellation; `Menagerie` owns SwiftUI views, the AppKit status item, and SwiftTerm integration. The Rust workspace keeps `crates/agent`, `crates/protocol`, and `crates/fleet`.
+- Check Swift with `swift test --package-path macos` and `swift format lint --strict --recursive macos/Sources macos/Tests macos/Package.swift`. Check Rust with `cargo fmt --all --check`, `cargo clippy --workspace --all-targets -- -D warnings`, and `cargo test --workspace`.
+- Build the signed app with `scripts/bundle` using Xcode 27.2 or newer. `scripts/bundle --notarize` retains the notarytool profile flow. The executable accepts `--show-window` and `--show-popover` for real-app inspection. Use `screencapture` for screenshots.
+- Exercise sync and commit against temporary repositories with `MENAGERIE_FLEET` pointing to a disposable fleet, using a `custom` sync command. Keep the owner's running app and real configuration checkout untouched by deployment tests.
+- `macos/Sources/Menagerie/Views.swift` holds the palette. Colour carries meaning: green healthy or charging, amber needs attention, sage the primary action. Service letter icons retain their brand colours.
+- Authorization Services runs only the rebuild as root, with a pipe-watching wrapper to cancel its process group. Git runs as the user. Preserve commit-only flake URLs, literal pathspecs, symlink-safe reads, secret filtering, and bounded terminal input/output when changing these paths.
+- The original design plan is `docs/plans/master-plan-v1.html`; it contains historical Rust and deployment decisions. Current source is authoritative. Historical UI judging rounds are in `.ui-judge/`.
