@@ -12,6 +12,10 @@ public struct Change: Sendable, Equatable, Identifiable {
   }
 }
 public enum Commit {
+  public static func oneLine(_ text: String) -> String {
+    text.unicodeScalars.map { $0.properties.generalCategory == .control ? " " : String($0) }
+      .joined()
+  }
   public static func changes(repo: String) throws -> [Change] {
     let numstat = try Runner.git(repo, ["diff", "HEAD", "--numstat", "--no-renames", "-z"])
     var counts: [String: Change.LineCounts] = [:]

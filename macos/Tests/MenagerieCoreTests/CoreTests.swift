@@ -268,3 +268,12 @@ func localDetectionRequiresAnActualLoopbackAddress(url: String, expected: Bool) 
   let fleet = try Fleet.parse("version: 1\nmachines: { remote: { agent: '\(url)' } }")
   #expect(Deployment.isLocal("remote", fleet.machines["remote"]!, hostname: "this-mac") == expected)
 }
+@Test func pastedCommitMessagesStayOnOneLine() {
+  #expect(Commit.oneLine("a\nb\tc") == "a b c")
+  #expect(Commit.oneLine("fix: 界\r\nbody") == "fix: 界  body")
+}
+@Test func driftLabelsDropZeroDirections() {
+  #expect(MachineStatus.drift(ahead: 0, behind: 4, dirty: false).label == "↓4")
+  #expect(MachineStatus.drift(ahead: 2, behind: 0, dirty: false).label == "↑2")
+  #expect(MachineStatus.drift(ahead: 2, behind: 4, dirty: false).label == "↑2 ↓4")
+}

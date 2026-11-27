@@ -342,7 +342,10 @@ struct CommitPage: View {
           }
         }.toggleStyle(.checkbox)
       }.scrollContentBackground(.hidden).disabled(model.committing)
-      TextField("Commit message", text: $model.message, axis: .vertical).textFieldStyle(
+      TextField(
+        "Commit message",
+        text: Binding(get: { model.message }, set: { model.message = Commit.oneLine($0) })
+      ).textFieldStyle(
         .roundedBorder
       ).disabled(model.committing)
       Text(model.commitNote).font(.caption).textSelection(.enabled)
