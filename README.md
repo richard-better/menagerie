@@ -10,6 +10,8 @@ Menagerie shows each machine's health, its services, and how far its configurati
 
 Menagerie reads `~/.config/menagerie/fleet.yaml` (or `$MENAGERIE_FLEET`). [examples/fleet.yaml](examples/fleet.yaml) shows the format; on first launch the app offers to create the file from it.
 
+Sync deploys commits, never a working tree: each machine builds the commit its checkout is on, so uncommitted edits (often a tool rewriting its own settings) neither block a sync nor end up in one. To deploy them, click "Checkout: uncommitted changes" in the window to commit and push them. Set `commit_message` in the fleet file to a command, such as a coding agent's CLI, and it drafts the message from the diff.
+
 ## Building
 
 Needs Rust, macOS, and Zig 0.17 for the terminal (Ghostty's libghostty-vt is built from source): `mise install` provides it from `mise.toml`. gpui's shaders are compiled at runtime, so the Command Line Tools are enough; the full Xcode is not required.
