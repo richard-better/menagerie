@@ -45,7 +45,9 @@ public enum CheckoutMutation {
     do {
       result = try Runner.run(
         Command(
-          "/usr/bin/git", ["-C", repo, "rebase", "-q", "--autostash", "FETCH_HEAD"], timeout: 300),
+          "/usr/bin/git",
+          ["-C", repo, "rebase", "-q", "--no-rebase-merges", "--autostash", "FETCH_HEAD"],
+          timeout: 300),
         onStart: { started.withLock { $0 = true } }, cancel: cancel)
       _ = try result.checked()
     } catch {
