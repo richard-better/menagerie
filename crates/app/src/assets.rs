@@ -14,6 +14,7 @@ pub mod icon {
     pub const MORE: &str = "icons/more.svg";
     pub const EXTERNAL: &str = "icons/external.svg";
     pub const BACK: &str = "icons/back.svg";
+    pub const NOTCH: &str = "icons/notch.svg";
 }
 
 const ICONS: &[(&str, &str)] = &[
@@ -25,6 +26,7 @@ const ICONS: &[(&str, &str)] = &[
     (icon::MORE, include_str!("../assets/icons/more.svg")),
     (icon::EXTERNAL, include_str!("../assets/icons/external.svg")),
     (icon::BACK, include_str!("../assets/icons/back.svg")),
+    (icon::NOTCH, include_str!("../assets/icons/notch.svg")),
 ];
 
 pub struct Assets;

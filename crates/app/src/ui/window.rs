@@ -243,7 +243,7 @@ impl FleetWindow {
                         .child(store.label(name)),
                 );
             if active {
-                tile.bg(theme::panel())
+                tile.relative().child(notch())
             } else {
                 tile.hover(|s| s.bg(rgb(0x1c1c1f)))
             }
@@ -823,6 +823,41 @@ impl Render for FleetWindow {
         }
         root
     }
+}
+
+/// A notch in the panel's top edge, pointing up at the selected machine,
+/// so the details read as that machine's. A triangle in the line colour
+/// with one in the panel colour just below it: together an outlined notch
+/// that also covers the panel's border beneath it. Deferred, so it paints
+/// over the panel, which comes later.
+fn notch() -> impl IntoElement {
+    const W: f32 = 22.;
+    const H: f32 = 11.;
+    // How far the inner triangle sits below the outer: the outline's width
+    // along the slopes.
+    const INSET: f32 = 1.5;
+    let triangle = |top: f32, colour: gpui::Rgba| {
+        gpui::svg()
+            .path(icon::NOTCH)
+            .absolute()
+            .top(px(top))
+            .left_0()
+            .w(px(W))
+            .h(px(H))
+            .text_color(colour)
+    };
+    gpui::deferred(
+        div()
+            .absolute()
+            // The outer triangle's base on the border line's lower edge.
+            .bottom(px(-1. - INSET))
+            .left(gpui::relative(0.5))
+            .ml(px(-W / 2.))
+            .w(px(W))
+            .h(px(H + INSET))
+            .child(triangle(0., theme::line()))
+            .child(triangle(INSET, theme::panel())),
+    )
 }
 
 fn section() -> gpui::Div {
