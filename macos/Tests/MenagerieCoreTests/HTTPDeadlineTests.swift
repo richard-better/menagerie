@@ -36,7 +36,8 @@ private final class SlowHTTPServer {
       var request = [UInt8](repeating: 0, count: 4096)
       _ = read(client, &request, request.count)
       let headers = Array(
-        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 10000\r\nConnection: close\r\n\r\n".utf8)
+        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 10000\r\nConnection: close\r\n\r\n"
+          .utf8)
       _ = headers.withUnsafeBytes { write(client, $0.baseAddress!, $0.count) }
       var byte: UInt8 = 32
       for _ in 0..<100 {
