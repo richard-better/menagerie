@@ -94,55 +94,57 @@ struct TerminalPage: NSViewRepresentable {
   override func draw(_ dirtyRect: NSRect) {
     color(0x0e1311).setFill()
     dirtyRect.intersection(bounds).fill()
-    for glyph in frameState.glyphs {
-      let rect = NSRect(
-        x: 10 + CGFloat(glyph.column) * cellWidth, y: 10 + CGFloat(glyph.row) * 16,
-        width: CGFloat(glyph.width) * cellWidth, height: 16)
-      guard dirtyRect.intersects(rect) else { continue }
-      let inverse = glyph.flags & 16 != 0
-      let fg = inverse ? glyph.background ?? 0x0e1311 : glyph.foreground ?? 0xf0eee8
-      let bg = inverse ? glyph.foreground ?? 0xf0eee8 : glyph.background
-      if let bg {
-        color(bg).setFill()
-        rect.fill()
-      }
-      if let selection {
-        let index = glyph.row * frameState.columns + glyph.column
-        if index + glyph.width - 1 >= min(selection.start, selection.end)
-          && index <= max(selection.start, selection.end)
-        {
-          color(0x33413a).setFill()
-          rect.fill()
-        }
-      }
-      guard glyph.flags & 32 == 0 else { continue }
+    for run in frameState.runs {
+      let inverse = run.flags & 16 != 0
+      let fg = inverse ? run.background ?? 0x0e1311 : run.foreground ?? 0xf0eee8
+      let bg = inverse ? run.foreground ?? 0xf0eee8 : run.background
       var styledFont = font
-      if glyph.flags & 1 != 0 {
+      if run.flags & 1 != 0 {
         styledFont = NSFontManager.shared.convert(styledFont, toHaveTrait: .boldFontMask)
       }
-      if glyph.flags & 2 != 0 {
+      if run.flags & 2 != 0 {
         styledFont = NSFontManager.shared.convert(styledFont, toHaveTrait: .italicFontMask)
       }
       let attributes: [NSAttributedString.Key: Any] = [
         .font: styledFont,
-        .foregroundColor: color(fg).withAlphaComponent(glyph.flags & 4 != 0 ? 0.5 : 1),
+        .foregroundColor: color(fg).withAlphaComponent(run.flags & 4 != 0 ? 0.5 : 1),
       ]
-      let line = CTLineCreateWithAttributedString(
-        NSAttributedString(string: glyph.text, attributes: attributes))
-      if let context = NSGraphicsContext.current?.cgContext {
-        context.saveGState()
-        context.clip(to: rect)
-        context.textMatrix = CGAffineTransform(scaleX: 1, y: -1)
-        context.textPosition = CGPoint(x: rect.minX, y: rect.minY + font.ascender)
-        CTLineDraw(line, context)
-        context.restoreGState()
-      }
-      color(fg).setFill()
-      if glyph.flags & 0x700 != 0 {
-        NSRect(x: rect.minX, y: rect.maxY - 2, width: rect.width, height: 1).fill()
-      }
-      if glyph.flags & 64 != 0 {
-        NSRect(x: rect.minX, y: rect.midY, width: rect.width, height: 1).fill()
+      for glyph in run.glyphs {
+        let rect = NSRect(
+          x: 10 + CGFloat(glyph.column) * cellWidth, y: 10 + CGFloat(glyph.row) * 16,
+          width: CGFloat(glyph.width) * cellWidth, height: 16)
+        guard dirtyRect.intersects(rect) else { continue }
+        if let bg {
+          color(bg).setFill()
+          rect.fill()
+        }
+        if let selection {
+          let index = glyph.row * frameState.columns + glyph.column
+          if index + glyph.width - 1 >= min(selection.start, selection.end)
+            && index <= max(selection.start, selection.end)
+          {
+            color(0x33413a).setFill()
+            rect.fill()
+          }
+        }
+        guard run.flags & 32 == 0 else { continue }
+        if glyph.text != " ", let context = NSGraphicsContext.current?.cgContext {
+          let line = CTLineCreateWithAttributedString(
+            NSAttributedString(string: glyph.text, attributes: attributes))
+          context.saveGState()
+          context.clip(to: rect)
+          context.textMatrix = CGAffineTransform(scaleX: 1, y: -1)
+          context.textPosition = CGPoint(x: rect.minX, y: rect.minY + font.ascender)
+          CTLineDraw(line, context)
+          context.restoreGState()
+        }
+        color(fg).setFill()
+        if run.flags & 0x700 != 0 {
+          NSRect(x: rect.minX, y: rect.maxY - 2, width: rect.width, height: 1).fill()
+        }
+        if run.flags & 64 != 0 {
+          NSRect(x: rect.minX, y: rect.midY, width: rect.width, height: 1).fill()
+        }
       }
     }
     if let cursor = frameState.cursor {

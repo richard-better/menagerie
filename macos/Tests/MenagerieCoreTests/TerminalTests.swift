@@ -171,3 +171,12 @@ import Testing
     #expect(session.output.latest(after: 0)?.1.text.contains("controlling-terminal-ready") == true)
   }
 }
+@Test func adjacentGlyphsShareStyledRunsWithoutMergingRows() throws {
+  let screen = try GhosttyScreen(columns: 20, rows: 2)
+  screen.write("ab\u{1b}[1;31mred\u{1b}[0m\r\nnext")
+  let frame = screen.snapshot()
+  let red = frame.runs.first { $0.glyphs.map(\.text).joined() == "red" }
+  #expect((red?.flags ?? 0) & 1 == 1)
+  #expect(red?.foreground != nil)
+  #expect(frame.runs.allSatisfy { Set($0.glyphs.map(\.row)).count == 1 })
+}

@@ -7,7 +7,13 @@ public struct TerminalGlyph: Sendable, Equatable {
   public var foreground, background: UInt32?
   public var flags: UInt16
 }
+public struct TerminalRun: Sendable {
+  public var glyphs: [TerminalGlyph]
+  public var foreground, background: UInt32?
+  public var flags: UInt16
+}
 public struct TerminalFrame: Sendable {
+  public var runs: [TerminalRun] = []
   public var glyphs: [TerminalGlyph] = []
   public var cursor: (column: Int, row: Int)?
   public var columns = 100
@@ -86,6 +92,19 @@ public final class GhosttyScreen {
           column: Int(cell.x), row: Int(cell.y), width: Int(cell.width), text: text,
           foreground: cell.has_fg ? fg : nil, background: cell.has_bg ? bg : nil, flags: cell.flags)
       )
+    }
+    for glyph in frame.glyphs {
+      if let last = frame.runs.last, last.glyphs.last?.row == glyph.row,
+        last.foreground == glyph.foreground, last.background == glyph.background,
+        last.flags == glyph.flags
+      {
+        frame.runs[frame.runs.count - 1].glyphs.append(glyph)
+      } else {
+        frame.runs.append(
+          TerminalRun(
+            glyphs: [glyph], foreground: glyph.foreground, background: glyph.background,
+            flags: glyph.flags))
+      }
     }
     var x: UInt16 = 0
     var y: UInt16 = 0
