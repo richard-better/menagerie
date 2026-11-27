@@ -77,3 +77,14 @@ func administratorStopNeverAcceptsZeroExit(cancelInsteadOfTimeout: Bool) throws 
   } catch { #expect(String(describing: error) == "Administrator command timed out") }
   #expect(Date().timeIntervalSince(start) < 1)
 }
+
+@Test func administratorFramesCompletionAfterUnterminatedOutput() throws {
+  let channel = try AuthorizedTestChannel(arguments: [
+    "-T", "-e", Administrator.supervisor, "--", "/bin/sh", "-c", "printf partial",
+  ])
+  let output = OutputBuffer()
+  let result = try Administrator.runAuthorizedChannel(
+    channel.descriptor, timeout: 2, cancel: Cancellation(), output: { output.append($0) })
+  #expect(result.status == 0 && result.output == "partial")
+  #expect(output.text.contains("partial\n") && !output.text.contains("menagerie-admin-"))
+}

@@ -14,7 +14,7 @@ public enum Administrator {
     my @argv = map { /\A(.*)\z/s; $1 } @ARGV;
     $< = $>;
     if ($> == 0) { POSIX::setgid(0) == 0 or die "setgid: $!"; }
-    print "menagerie-admin-pid: $$\n";
+    print "\nmenagerie-admin-pid: $$\n";
     my $start = <STDIN>;
     exit 0 unless defined($start) && $start eq "start\n";
     my $job = fork(); defined($job) or die "fork: $!";
@@ -37,7 +37,7 @@ public enum Administrator {
         select(undef, undef, undef, 0.05);
       }
     }
-    print "menagerie-admin-exit: ", (($status & 127) ? 128 + ($status & 127) : $status >> 8), "\n";
+    print "\nmenagerie-admin-exit: ", (($status & 127) ? 128 + ($status & 127) : $status >> 8), "\n";
     """#
   static func needsAuthorization(_ result: CommandResult) -> Bool {
     result.status == 1 && result.output.isEmpty
@@ -144,7 +144,7 @@ public enum Administrator {
           exit = Int32(line.dropFirst(22))
         } else {
           output(line + "\n")
-          tail = String(line.suffix(4096))
+          if !line.isEmpty { tail = String(line.suffix(4096)) }
         }
       }
       if pending.count > 65536 {
