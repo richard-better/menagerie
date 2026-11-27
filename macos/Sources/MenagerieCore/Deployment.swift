@@ -52,6 +52,20 @@ public enum Deployment {
       git push origin \(shellQuote("HEAD:refs/heads/" + branch))
       """
   }
+  public static func flakeURL(path: String, branch: String, attribute: String) -> String {
+    var url = URLComponents()
+    url.scheme = "git+file"
+    url.host = ""
+    url.path = URL(fileURLWithPath: expandHome(path)).standardizedFileURL.path
+    url.queryItems = [URLQueryItem(name: "ref", value: "refs/heads/" + branch)]
+    url.fragment = attribute
+    return url.string!
+  }
+  static let remoteFlakeAssignment = #"""
+    cd -P . || exit 1
+    encoded=$(printf '%s' "$PWD" | od -An -v -tx1 | awk '{for(i=1;i<=NF;i++) if($i=="2f") printf "/"; else printf "%%%s",toupper($i)}') || exit 1
+    flake="git+file://$encoded?rev=$(git rev-parse HEAD)" || exit 1
+    """#
   public static func plan(_ action: Action, fleet: Fleet, name: String) throws -> [DeploymentStep] {
     guard let machine = fleet.machines[name], let sync = machine.sync else {
       throw FleetError("No sync settings for \(name)")
@@ -86,10 +100,8 @@ public enum Deployment {
             label: "Pull this Mac's checkout",
             command: Command(
               "/bin/sh", ["-c", "cd \(shellQuote(dir)) || exit 1\n" + pull], timeout: 300)))
-        let escaped = dir.replacingOccurrences(of: "%", with: "%25").replacingOccurrences(
-          of: " ", with: "%20")
         arguments = [
-          "switch", "--flake", "git+file://\(escaped)?ref=refs/heads/\(fleet.branch)#\(attr)",
+          "switch", "--flake", flakeURL(path: dir, branch: fleet.branch, attribute: attr),
         ]
       } else {
         arguments = sync.preset == .nixDarwin ? ["--rollback"] : ["switch", "--rollback"]
@@ -100,7 +112,9 @@ public enum Deployment {
           administrator: true))
       return steps
     }
-    let target = "\"$flake\"" + shellQuote("#" + attr)
+    var fragment = URLComponents()
+    fragment.fragment = attr
+    let target = "\"$flake\"" + shellQuote("#" + (fragment.percentEncodedFragment ?? ""))
     let rebuild: String
     switch (action, sync.preset) {
     case (.sync, .nixDarwin): rebuild = "sudo -n darwin-rebuild switch --flake " + target
@@ -112,8 +126,7 @@ public enum Deployment {
     case (.rollback, .homeManager): rebuild = "home-manager switch --rollback"
     case (.rollback, .custom): throw FleetError("Custom commands have no rollback")
     }
-    let flake =
-      #"flake="git+file://$(pwd -P | sed 's/%/%25/g; s/ /%20/g')?rev=$(git rev-parse HEAD)" || exit 1"#
+    let flake = remoteFlakeAssignment
     let script =
       "cd \(shellPath(repo)) || exit 1\n" + (action == .sync ? pull + "\n" + flake + "\n" : "")
       + rebuild
