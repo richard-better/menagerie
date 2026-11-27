@@ -24,12 +24,33 @@ func symbol(_ machine: Machine) -> String {
   case .other: "display"
   }
 }
+/// Whether the machine is reachable, as a badge on its device icon. Online is
+/// green, offline a dim grey, and a machine without an agent has no badge.
+/// Needing a sync is shown by the Sync action, not here.
 struct StatusDot: View {
   var status: MachineStatus
+  var size: CGFloat = 8
   var body: some View {
-    Circle().fill(status.needsSync ? Palette.amber : status.online ? Palette.green : Palette.muted)
-      .opacity(status == .offline ? 0.35 : 1).frame(width: 6, height: 6).accessibilityLabel(
-        status.label)
+    if status != .noAgent {
+      Circle().fill(status.online ? Palette.green : Palette.muted)
+        .opacity(status.online ? 1 : 0.5).frame(width: size, height: size)
+        .overlay(Circle().stroke(Palette.background, lineWidth: 2))
+        .accessibilityLabel(status.online ? "online" : "offline")
+    }
+  }
+}
+/// A machine's device icon with its status badge in the bottom-right corner.
+struct DeviceIcon: View {
+  var machine: Machine
+  var status: MachineStatus
+  var size: CGFloat
+  var badge: CGFloat
+  var tint: Color = Palette.ink
+  var body: some View {
+    Image(systemName: symbol(machine)).font(.system(size: size)).foregroundStyle(tint)
+      .overlay(alignment: .bottomTrailing) {
+        StatusDot(status: status, size: badge).offset(x: badge / 3, y: badge / 3)
+      }
   }
 }
 struct FleetPopover: View {
@@ -39,6 +60,10 @@ struct FleetPopover: View {
     VStack(spacing: 0) {
       ForEach(model.fleet?.order ?? [], id: \.self) { name in
         if let machine = model.fleet?.machines[name] {
+          // A hairline between entries, inset to the rows' padding.
+          if name != model.fleet?.order.first {
+            Rectangle().fill(Palette.ink.opacity(0.08)).frame(height: 1).padding(.horizontal, 14)
+          }
           // The status or Sync button stays on the far right of every row;
           // services get their own row under the name, so neither squeezes it.
           VStack(alignment: .leading, spacing: 8) {
@@ -49,14 +74,10 @@ struct FleetPopover: View {
                 open()
               } label: {
                 HStack(spacing: 10) {
-                  Image(systemName: symbol(machine)).font(.title2).frame(width: 32)
+                  DeviceIcon(machine: machine, status: model.status(name), size: 20, badge: 8)
+                    .frame(width: 32)
                   VStack(alignment: .leading, spacing: 4) {
-                    HStack {
-                      StatusDot(status: model.status(name))
-                      Text(name).fontWeight(.medium).lineLimit(1)
-                    }
-                    Text(machine.role ?? "").font(.caption).foregroundStyle(Palette.muted)
-                      .lineLimit(1)
+                    Text(name).fontWeight(.medium).lineLimit(1)
                     if let job = model.jobs[name], !job.running, let result = job.result {
                       Text(result).font(.caption).foregroundStyle(
                         result == "Succeeded" ? Palette.green : Palette.amber
@@ -74,8 +95,6 @@ struct FleetPopover: View {
                 Button(model.status(name).label, systemImage: "arrow.trianglehead.2.clockwise") {
                   model.deploy(name, action: .sync)
                 }.buttonStyle(.glass).disabled(model.jobs[name]?.running == true)
-              } else {
-                Text(model.status(name).label).font(.caption).foregroundStyle(Palette.muted)
               }
             }
             if !machine.services.isEmpty {
@@ -93,14 +112,6 @@ struct FleetPopover: View {
         }
       }
       if let error = model.error { Text(error).font(.caption).textSelection(.enabled).padding() }
-      Divider()
-      HStack {
-        Text(model.summary).font(.caption).foregroundStyle(Palette.muted)
-        Spacer()
-        Button("Open Menagerie", systemImage: "macwindow", action: open).labelStyle(.iconOnly)
-        Button("Edit fleet", systemImage: "gearshape", action: model.editFleet).labelStyle(
-          .iconOnly)
-      }.buttonStyle(.plain).padding(10)
     }.frame(width: 450).foregroundStyle(Palette.ink).background(Palette.background.opacity(0.92))
       .preferredColorScheme(.dark)
   }
@@ -134,13 +145,13 @@ struct FleetView: View {
               model.page = "details"
             } label: {
               VStack(spacing: 9) {
-                Image(systemName: symbol(machine)).font(.system(size: 32)).foregroundStyle(
-                  model.selected == name ? Palette.ink : Palette.muted)
+                DeviceIcon(
+                  machine: machine, status: model.status(name), size: 32, badge: 10,
+                  tint: model.selected == name ? Palette.ink : Palette.muted)
                 Text(name).font(.caption).lineLimit(1)
-                HStack(spacing: 5) {
-                  StatusDot(status: model.status(name))
-                  Text(model.status(name).label).font(.caption2).foregroundStyle(Palette.muted)
-                }
+                // Only drift is worth words here: the strip has no Sync action.
+                Text(model.status(name).needsSync ? model.status(name).label : " ")
+                  .font(.caption2).foregroundStyle(Palette.amber)
               }.frame(maxWidth: .infinity).padding(.vertical, 22).contentShape(Rectangle())
             }.buttonStyle(.plain).accessibilityAddTraits(model.selected == name ? .isSelected : [])
           }
@@ -225,8 +236,11 @@ struct FleetView: View {
         }
         Spacer()
         VStack(alignment: .trailing, spacing: 8) {
-          Text(model.status(model.selected).label).font(.title).monospacedDigit().foregroundStyle(
-            model.status(model.selected).needsSync ? Palette.amber : Palette.ink)
+          // Only drift is worth words: online shows as the badge, in sync as nothing.
+          if model.status(model.selected).needsSync {
+            Text(model.status(model.selected).label).font(.title).monospacedDigit()
+              .foregroundStyle(Palette.amber)
+          }
           if let report = model.detailsReport(model.selected),
             report.probes.revision.isFresh(now: report.agent.now),
             let revision = report.probes.revision.value

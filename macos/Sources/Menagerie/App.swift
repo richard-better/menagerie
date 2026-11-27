@@ -25,6 +25,11 @@ import SwiftUI
   private var item: NSStatusItem!
   private let popover = NSPopover()
   private var terminating = false
+  /// Opens the fleet window. Only SwiftUI views can open scenes, so the
+  /// popover hands this over when it first appears; until then the menu's
+  /// Open item shows the popover once to get it.
+  private var openFleet: (() -> Void)?
+  private var openWhenReady = false
   #if MENAGERIE_BENCHMARK
     private var benchmarkSource: DispatchSourceSignal?
     private var benchmarkAnchor: NSWindow?
@@ -115,7 +120,15 @@ import SwiftUI
     guard popover.contentViewController == nil else { return }
     let hosting = NSHostingController(
       rootView: PopoverRoot(
-        model: model, dismiss: { [weak self] in self?.popover.performClose(nil) }))
+        model: model, dismiss: { [weak self] in self?.popover.performClose(nil) },
+        register: { [weak self] open in
+          guard let self else { return }
+          self.openFleet = open
+          if self.openWhenReady {
+            self.openWhenReady = false
+            open()
+          }
+        }))
     hosting.sizingOptions = .preferredContentSize
     popover.contentViewController = hosting
   }
@@ -149,15 +162,32 @@ import SwiftUI
           (ProcessInfo.processInfo.environment["MENAGERIE_TEST_TITLE"] ?? "")
           + (model.attention > 0 ? " \(model.attention)" : "")
       #else
-        item.button?.title = model.attention > 0 ? " \(model.attention)" : ""
+        // The mark alone: what needs attention shows in the popover.
+        item.button?.title = ""
       #endif
     } onChange: { [weak self] in
       Task { @MainActor in self?.observeStatus() }
     }
   }
+  @objc private func openWindow() {
+    if let openFleet {
+      openFleet()
+    } else if let button = item.button {
+      openWhenReady = true
+      NSApp.activate()
+      preparePopover()
+      popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
+    }
+  }
+  @objc private func editFleet() { model.editFleet() }
   @objc private func click() {
     if NSApp.currentEvent?.type == .rightMouseUp {
       let menu = NSMenu()
+      menu.addItem(withTitle: "Open Menagerie", action: #selector(openWindow), keyEquivalent: "o")
+        .target = self
+      menu.addItem(withTitle: "Edit Fleet File", action: #selector(editFleet), keyEquivalent: ",")
+        .target = self
+      menu.addItem(.separator())
       let quit = menu.addItem(
         withTitle: "Quit Menagerie", action: #selector(NSApplication.terminate(_:)),
         keyEquivalent: "q")
@@ -177,9 +207,11 @@ import SwiftUI
 struct PopoverRoot: View {
   var model: Model
   var dismiss: () -> Void
+  var register: (@escaping () -> Void) -> Void
   @Environment(\.openWindow) var openWindow
   var body: some View {
     FleetPopover(model: model, open: openFleet)
+      .onAppear { register(openFleet) }
       #if MENAGERIE_BENCHMARK
         .onReceive(NotificationCenter.default.publisher(for: .init("MenagerieBenchmarkOpen"))) {
           _ in
