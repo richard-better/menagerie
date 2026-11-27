@@ -28,7 +28,8 @@ import Testing
 }
 @Test func privilegedSupervisorRequiresExplicitStart() throws {
   let result = try Runner.run(
-    Command("/usr/bin/perl", ["-e", Administrator.supervisor, "--", "/bin/echo", "must-not-run"]))
+    Command(
+      "/usr/bin/perl", ["-T", "-e", Administrator.supervisor, "--", "/bin/echo", "must-not-run"]))
   #expect(result.status == 0 && !result.output.contains("must-not-run"))
 }
 @Test func privilegedSupervisorOutlivesLeaderAndKillsIgnoringDescendants() throws {
@@ -37,7 +38,7 @@ import Testing
   let output = Pipe()
   process.executableURL = URL(fileURLWithPath: "/usr/bin/perl")
   process.arguments = [
-    "-e", Administrator.supervisor, "--", "/bin/sh", "-c",
+    "-T", "-e", Administrator.supervisor, "--", "/bin/sh", "-c",
     "trap '' TERM; sleep 30 & echo child:$!; exit 0",
   ]
   process.standardInput = input

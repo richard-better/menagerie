@@ -9,6 +9,9 @@ public enum Administrator {
     use Time::HiRes qw(time);
     open(STDERR, ">&STDOUT") or die "stderr: $!";
     $| = 1;
+    $ENV{PATH} = "/run/current-system/sw/bin:/nix/var/nix/profiles/default/bin:/usr/bin:/bin:/usr/sbin:/sbin";
+    delete @ENV{qw(IFS CDPATH ENV BASH_ENV)};
+    my @argv = map { /\A(.*)\z/s; $1 } @ARGV;
     $< = $>;
     if ($> == 0) { POSIX::setgid(0) == 0 or die "setgid: $!"; }
     print "menagerie-admin-pid: $$\n";
@@ -18,7 +21,7 @@ public enum Administrator {
     if ($job == 0) {
       setpgid(0, 0) == 0 or die "setpgid: $!";
       open(STDIN, "<", "/dev/null") or die "stdin: $!";
-      exec { $ARGV[0] } @ARGV; die "exec: $!";
+      exec { $argv[0] } @argv; die "exec: $!";
     }
     setpgid($job, $job);
     my $control = IO::Select->new(\*STDIN);
