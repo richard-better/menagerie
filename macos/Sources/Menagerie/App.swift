@@ -8,6 +8,10 @@ import SwiftUI
     let model = delegate.model
     return WindowGroup("Menagerie", id: "fleet") {
       FleetView(model: model).task { model.start() }
+        .background(
+          WindowLifetime(
+            live: model.observations[model.selected]?.report != nil,
+            sequence: WindowTiming.shared.sequence))
     }.defaultSize(width: 820, height: 760).defaultLaunchBehavior(
       ProcessInfo.processInfo.arguments.contains("--show-window") ? .presented : .suppressed)
   }
@@ -17,6 +21,7 @@ import SwiftUI
   private var item: NSStatusItem!
   private let popover = NSPopover()
   private var terminating = false
+  private var benchmarkSource: DispatchSourceSignal?
   func applicationDidFinishLaunching(_ notification: Notification) {
     NSApp.setActivationPolicy(.accessory)
     NSApp.appearance = NSAppearance(named: .darkAqua)
@@ -41,6 +46,31 @@ import SwiftUI
     model.start()
     if ProcessInfo.processInfo.arguments.contains("--show-window") { NSApp.activate() }
     observeStatus()
+    if ProcessInfo.processInfo.environment["MENAGERIE_WINDOW_TRACE"] != nil {
+      signal(SIGUSR1, SIG_IGN)
+      let source = DispatchSource.makeSignalSource(signal: SIGUSR1, queue: .main)
+      source.setEventHandler { [weak self] in
+        MainActor.assumeIsolated {
+          guard let path = ProcessInfo.processInfo.environment["MENAGERIE_WINDOW_TRACE"],
+            let command = try? String(contentsOfFile: path + ".command", encoding: .utf8)
+          else { return }
+          if command == "open" {
+            if let self, let button = self.item.button {
+              self.popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
+            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+              NotificationCenter.default.post(name: .init("MenagerieBenchmarkOpen"), object: nil)
+            }
+          } else if command == "close" {
+            NSApp.windows.first(where: { $0.title == "Menagerie" && $0.canBecomeMain })?
+              .performClose(nil)
+          }
+          _ = self
+        }
+      }
+      benchmarkSource = source
+      source.resume()
+    }
     if ProcessInfo.processInfo.arguments.contains("--show-popover") {
       Task { @MainActor [weak self] in
         try? await Task.sleep(for: .milliseconds(500))
@@ -68,7 +98,9 @@ import SwiftUI
   func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }
   private func observeStatus() {
     withObservationTracking {
-      item.button?.title = model.attention > 0 ? " \(model.attention)" : ""
+      item.button?.title =
+        (ProcessInfo.processInfo.environment["MENAGERIE_TEST_TITLE"] ?? "")
+        + (model.attention > 0 ? " \(model.attention)" : "")
     } onChange: { [weak self] in
       Task { @MainActor in self?.observeStatus() }
     }
@@ -96,14 +128,19 @@ struct PopoverRoot: View {
   var dismiss: () -> Void
   @Environment(\.openWindow) var openWindow
   var body: some View {
-    FleetPopover(model: model) {
-      dismiss()
-      if let window = NSApp.windows.first(where: { $0.title == "Menagerie" && $0.canBecomeMain }) {
-        window.makeKeyAndOrderFront(nil)
-      } else {
-        openWindow(id: "fleet")
+    FleetPopover(model: model, open: openFleet)
+      .onReceive(NotificationCenter.default.publisher(for: .init("MenagerieBenchmarkOpen"))) { _ in
+        openFleet()
       }
-      NSApp.activate()
+  }
+  private func openFleet() {
+    WindowTiming.shared.begin()
+    dismiss()
+    if let window = NSApp.windows.first(where: { $0.title == "Menagerie" && $0.canBecomeMain }) {
+      window.makeKeyAndOrderFront(nil)
+    } else {
+      openWindow(id: "fleet")
     }
+    NSApp.activate()
   }
 }
