@@ -277,3 +277,33 @@ func localDetectionRequiresAnActualLoopbackAddress(url: String, expected: Bool) 
   #expect(MachineStatus.drift(ahead: 2, behind: 0, dirty: false).label == "↑2")
   #expect(MachineStatus.drift(ahead: 2, behind: 4, dirty: false).label == "↑2 ↓4")
 }
+
+@Test func conflictingCommitsAbortRebaseAndRetainTheLocalCommit() throws {
+  let repo = try Repository()
+  defer { repo.remove() }
+  try repo.write("setting", "base\n")
+  _ = try Runner.git(repo.path, ["add", "."])
+  _ = try Runner.git(repo.path, ["commit", "-qm", "base"])
+  let origin = try Repository()
+  defer { origin.remove() }
+  let remote = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString).path
+  defer { try? FileManager.default.removeItem(atPath: remote) }
+  _ = try Runner.run(Command("/usr/bin/git", ["clone", "--bare", "-q", repo.path, remote]))
+    .checked()
+  for path in [repo.path, origin.path] {
+    _ = try Runner.git(path, ["remote", "add", "origin", remote])
+  }
+  _ = try Runner.git(origin.path, ["fetch", "-q", "origin", "main"])
+  _ = try Runner.git(origin.path, ["reset", "--hard", "FETCH_HEAD"])
+  try origin.write("setting", "remote\n")
+  _ = try Runner.git(origin.path, ["commit", "-qam", "remote"])
+  _ = try Runner.git(origin.path, ["push", "-q", "origin", "main"])
+  try repo.write("setting", "local\n")
+  #expect(throws: (any Error).self) {
+    try Commit.commitAndPush(repo: repo.path, branch: "main", paths: ["setting"], message: "local")
+  }
+  #expect(try Runner.git(repo.path, ["show", "HEAD:setting"]) == "local\n")
+  #expect(try Runner.git(repo.path, ["rev-list", "--merges", "HEAD"]).isEmpty)
+  #expect(!FileManager.default.fileExists(atPath: repo.path + "/.git/rebase-merge"))
+  #expect(!FileManager.default.fileExists(atPath: repo.path + "/.git/rebase-apply"))
+}

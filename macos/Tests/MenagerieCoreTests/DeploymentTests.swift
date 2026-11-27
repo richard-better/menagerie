@@ -109,3 +109,22 @@ func administratorStreamsRealRootIdentityAndCancellation() throws {
   }
   #expect(Date().timeIntervalSince(started) < 10)
 }
+
+@Test func customRebuildNeverRunsAfterAFailedPull() throws {
+  let repo = try Repository()
+  defer { repo.remove() }
+  let marker = repo.path + "/must-not-exist"
+  let fleet = try Fleet.parse(
+    """
+    version: 1
+    machines:
+      local:
+        agent: http://localhost:9184
+        sync: {preset: custom, repo: '\(repo.path)', command: "touch \(shellQuote(marker))"}
+    """)
+  let steps = try Deployment.plan(.sync, fleet: fleet, name: "local")
+  #expect(throws: (any Error).self) {
+    try Deployment.run(steps, cancel: Cancellation(), output: { _ in })
+  }
+  #expect(!FileManager.default.fileExists(atPath: marker))
+}
