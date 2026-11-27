@@ -1,5 +1,6 @@
 //! Colours and type. The app has one look: dark, with colour only where it
-//! carries meaning (green healthy or charging, amber needs attention).
+//! carries meaning (green healthy or charging, amber needs attention), and
+//! the brand's sage on the one primary action.
 
 use gpui::{Hsla, Rgba, rgb};
 
@@ -29,7 +30,18 @@ pub fn green() -> Rgba {
     rgb(0x5ad18a)
 }
 pub fn amber() -> Rgba {
-    rgb(0xe9c548)
+    rgb(0xd9a657)
+}
+/// The primary action's fill: the brand's soft sage.
+pub fn accent() -> Rgba {
+    rgb(0xc5dcc0)
+}
+pub fn accent_hover() -> Rgba {
+    rgb(0xd5e7d1)
+}
+/// Text on `accent()`: the brand's forest ink.
+pub fn on_accent() -> Rgba {
+    rgb(0x151c19)
 }
 pub fn grey_dot() -> Rgba {
     rgb(0x8d8d94)

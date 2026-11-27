@@ -317,9 +317,9 @@ impl Render for CommitPage {
                             can_commit,
                         )
                         .when(can_commit, |b| {
-                            b.bg(rgb(0x2563eb))
-                                .text_color(rgb(0xffffff))
-                                .hover(|s| s.bg(rgb(0x3b74f0)))
+                            b.bg(theme::accent())
+                                .text_color(theme::on_accent())
+                                .hover(|s| s.bg(theme::accent_hover()))
                                 .on_click(cx.listener(|this, _, _, cx| this.commit(cx)))
                         }),
                     ),
