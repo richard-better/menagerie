@@ -15,6 +15,6 @@ let package = Package(
     .target(name: "AdminBridge", linkerSettings: [.linkedFramework("Security")]),
     .target(name: "MenagerieCore", dependencies: ["Yams", "AdminBridge"]),
     .executableTarget(name: "Menagerie", dependencies: ["MenagerieCore", "SwiftTerm"]),
-    .testTarget(name: "MenagerieCoreTests", dependencies: ["MenagerieCore"]),
+    .testTarget(name: "MenagerieCoreTests", dependencies: ["MenagerieCore", "SwiftTerm"]),
   ]
 )

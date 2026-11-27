@@ -33,6 +33,7 @@ final class TerminalTransport: LocalProcessDelegate, @unchecked Sendable {
       } else if let ssh = machine.ssh {
         process.startProcess(executable: "/usr/bin/ssh", args: ["-tt", "--", ssh])
       }
+      if state.withLock({ $0.closed }) { stopChild() }
     }
   }
   func resize(cols: Int, rows: Int) {
@@ -66,6 +67,9 @@ final class TerminalTransport: LocalProcessDelegate, @unchecked Sendable {
       return old
     }
     guard !closed else { return }
+    stopChild()
+  }
+  private func stopChild() {
     let pid = process.shellPid
     if pid > 0 {
       kill(-pid, SIGHUP)
@@ -96,7 +100,7 @@ final class TerminalTransport: LocalProcessDelegate, @unchecked Sendable {
     options.scrollback = 2000
     options.maximumOscBytes = 65536
     options.enableSixelReported = false
-    view = TerminalView(
+    view = SafeTerminalView(
       frame: CGRect(x: 0, y: 0, width: 700, height: 450),
       font: NSFont.monospacedSystemFont(ofSize: 12, weight: .regular), options: options)
     view.nativeBackgroundColor = NSColor(
@@ -123,3 +127,13 @@ struct TerminalPage: NSViewRepresentable {
 }
 
 private struct ProcessHandle: @unchecked Sendable { let process: LocalProcess }
+
+@MainActor private final class SafeTerminalView: TerminalView {
+  override func paste(_ sender: Any) {
+    guard let text = NSPasteboard.general.string(forType: .string) else { return }
+    let bytes = Array(text.utf8.prefix(256 * 1024))
+    var end = bytes.count
+    while end > 0 && String(bytes: bytes.prefix(end), encoding: .utf8) == nil { end -= 1 }
+    pasteText(String(decoding: bytes.prefix(end), as: UTF8.self))
+  }
+}
