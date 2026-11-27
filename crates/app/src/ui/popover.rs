@@ -6,7 +6,7 @@ use std::rc::Rc;
 
 use gpui::{
     App, Context, Entity, FontWeight, IntoElement, ParentElement, Render, SharedString, Styled,
-    Subscription, Window, div, prelude::*, px, rgb,
+    Subscription, Window, div, prelude::*, px,
 };
 use menagerie_fleet::Machine;
 
@@ -93,7 +93,7 @@ impl Popover {
             .py(px(9.))
             .rounded(px(9.))
             .cursor_pointer()
-            .hover(|s| s.bg(rgb(0x1e1e21)))
+            .hover(|s| s.bg(theme::bg_hover()))
             .on_click(move |_, _, cx| open(Some(target.clone()), cx))
             .child(
                 div()
@@ -183,7 +183,7 @@ fn trailing(
             .text_size(px(11.5))
             .font_weight(FontWeight::SEMIBOLD)
             .cursor_pointer()
-            .hover(|s| s.bg(rgb(0x2e2e33)))
+            .hover(|s| s.bg(theme::raise_hover()))
             .on_click(move |_, _, cx| {
                 // The row behind it opens the window; this only syncs.
                 cx.stop_propagation();

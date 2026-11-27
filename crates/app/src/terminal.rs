@@ -819,10 +819,10 @@ impl Render for TerminalView {
             for run in runs {
                 let style = |text: String, col: u16, inverse: bool| {
                     let mut span = div().absolute().left(cell * col as f32).top_0().child(text);
-                    let fg = run.fg.map(colour).unwrap_or(rgb(0xd8d8de));
+                    let fg = run.fg.map(colour).unwrap_or(theme::soft());
                     let bg = run.bg.map(colour);
                     if inverse {
-                        span = span.bg(fg).text_color(bg.unwrap_or(rgb(0x0f0f11)));
+                        span = span.bg(fg).text_color(bg.unwrap_or(theme::well()));
                     } else {
                         span = span.text_color(fg);
                         if let Some(bg) = bg {
@@ -894,7 +894,7 @@ impl Render for TerminalView {
             .size_full()
             .flex()
             .flex_col()
-            .bg(rgb(0x0f0f11))
+            .bg(theme::well())
             .child(
                 div()
                     .relative()
@@ -935,7 +935,7 @@ impl Render for TerminalView {
                     div()
                         .px(px(10.))
                         .pb(px(8.))
-                        .text_color(rgb(0xe5534b))
+                        .text_color(theme::red())
                         .child(e),
                 )
             })

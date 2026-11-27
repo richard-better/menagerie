@@ -169,10 +169,10 @@ impl Render for TextField {
             .overflow_hidden()
             .whitespace_nowrap()
             .rounded(px(7.))
-            .bg(gpui::rgb(0x0f0f11))
+            .bg(theme::well())
             .border_1()
             .border_color(if focused {
-                gpui::rgb(0x4a4a58)
+                theme::focus()
             } else {
                 theme::line()
             })

@@ -9,7 +9,7 @@ use std::path::PathBuf;
 
 use gpui::{
     Context, Entity, EventEmitter, FontWeight, IntoElement, ParentElement, Render, Styled,
-    Subscription, Task, Window, div, prelude::*, px, rgb,
+    Subscription, Task, Window, div, prelude::*, px,
 };
 
 use crate::commit::{self, Change};
@@ -182,7 +182,7 @@ impl CommitPage {
 
 impl Render for CommitPage {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let red = rgb(0xe5534b);
+        let red = theme::red();
         let mono = |text: String| {
             div()
                 .font_family(theme::MONO)

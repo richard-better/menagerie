@@ -5,7 +5,7 @@ use std::time::Duration;
 
 use gpui::{
     AnyElement, Context, Entity, FontWeight, Hsla, IntoElement, ParentElement, Render,
-    SharedString, Styled, Subscription, Task, Window, div, prelude::*, px, rgb,
+    SharedString, Styled, Subscription, Task, Window, div, prelude::*, px,
 };
 use menagerie_fleet::Machine;
 use menagerie_protocol as protocol;
@@ -245,7 +245,7 @@ impl FleetWindow {
             if active {
                 tile.relative().child(notch())
             } else {
-                tile.hover(|s| s.bg(rgb(0x1c1c1f)))
+                tile.hover(|s| s.bg(theme::bg_hover()))
             }
         });
         let edit = self.store.clone();
@@ -566,7 +566,7 @@ impl FleetWindow {
                 .rounded(px(6.))
                 .cursor_pointer()
                 .when(on, |el| {
-                    el.bg(rgb(0x3a3a40)).font_weight(FontWeight::SEMIBOLD)
+                    el.bg(theme::selected()).font_weight(FontWeight::SEMIBOLD)
                 })
                 .text_color(if on { theme::ink() } else { theme::mute() })
                 .on_click(cx.listener(move |this, _, _, cx| {
@@ -1059,7 +1059,7 @@ fn meter_block(
 /// Neutral until `warn`, amber until `critical`, red beyond.
 fn threshold(value: f64, warn: f64, critical: f64) -> Hsla {
     if value >= critical {
-        rgb(0xe5534b).into()
+        theme::red().into()
     } else if value >= warn {
         theme::amber().into()
     } else {
@@ -1127,7 +1127,7 @@ fn services(store: &Store, name: &str, machine: &Machine) -> impl IntoElement {
                     .border_1()
                     .border_color(theme::line())
                     .cursor_pointer()
-                    .hover(|s| s.bg(rgb(0x2b2b30)))
+                    .hover(|s| s.bg(theme::raise_hover()))
                     .on_click(move |_, _, cx| cx.open_url(&url))
                     .child(service_icon(service, 32.))
                     .child(
@@ -1187,7 +1187,7 @@ fn job_log(job: &crate::store::Job) -> impl IntoElement {
         .unwrap_or_else(std::time::Instant::now)
         .duration_since(job.started)
         .as_secs();
-    let red = rgb(0xe5534b);
+    let red = theme::red();
     let action = job.action.label();
     let (state, colour) = match &job.result {
         None => (format!("{action} running · {elapsed}s"), theme::mute()),
@@ -1251,12 +1251,12 @@ fn job_log(job: &crate::store::Job) -> impl IntoElement {
                 .overflow_y_scroll()
                 .p(px(10.))
                 .rounded(px(9.))
-                .bg(rgb(0x0f0f11))
+                .bg(theme::well())
                 .border_1()
                 .border_color(theme::line())
                 .font_family(theme::MONO)
                 .text_size(px(11.5))
-                .text_color(rgb(0xb9b9c0))
+                .text_color(theme::soft())
                 .when(tail.is_empty(), |el| el.child("Starting…"))
                 .children(tail.into_iter().enumerate().map(|(i, line)| {
                     let step = line.starts_with('▸');
@@ -1271,7 +1271,7 @@ fn job_log(job: &crate::store::Job) -> impl IntoElement {
                         .when(step, |el| el.text_color(theme::ink()).mt(px(4.)))
                         .when(failed_line == Some(i), |el| el.text_color(red))
                         .when_some(url, |el, url| {
-                            el.text_color(rgb(0x6fa0ff))
+                            el.text_color(theme::accent())
                                 .cursor_pointer()
                                 .on_click(move |_, _, cx| cx.open_url(&url))
                         })

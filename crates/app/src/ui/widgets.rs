@@ -26,8 +26,12 @@ pub fn status_dot(status: Status) -> Div {
 /// 80x44pt).
 pub fn device_glyph(device: Device, scale: f32, active: bool) -> Div {
     let s = |v: f32| px(v * scale);
-    let edge = if active { rgb(0x8a8a92) } else { rgb(0x5a5a62) };
-    let body = rgb(0x2b2b30);
+    let edge = if active {
+        theme::device_edge_active()
+    } else {
+        theme::device_edge()
+    };
+    let body = theme::device_body();
     let frame = div()
         .w(s(80.))
         .h(s(44.))
@@ -46,7 +50,7 @@ pub fn device_glyph(device: Device, scale: f32, active: bool) -> Div {
                     .border_color(edge)
                     .bg(body)
                     .p(s(3.))
-                    .child(div().size_full().rounded(s(1.5)).bg(rgb(0x3d6fd8))),
+                    .child(div().size_full().rounded(s(1.5)).bg(theme::device_screen())),
             )
             .child(div().w(s(68.)).h(s(4.)).rounded(s(2.)).bg(edge)),
         Device::Desktop => frame
@@ -193,7 +197,7 @@ pub fn icon_button(
         .items_center()
         .justify_center()
         .cursor_pointer()
-        .hover(|s| s.bg(rgb(0x2e2e33)))
+        .hover(|s| s.bg(theme::raise_hover()))
         .on_click(on_click)
         .child(
             svg()
@@ -258,9 +262,9 @@ pub fn text_button(
         button
             .text_color(theme::ink())
             .cursor_pointer()
-            .hover(|s| s.bg(rgb(0x2e2e33)))
+            .hover(|s| s.bg(theme::raise_hover()))
     } else {
-        button.text_color(rgb(0x5f5f66))
+        button.text_color(theme::faint())
     }
 }
 
