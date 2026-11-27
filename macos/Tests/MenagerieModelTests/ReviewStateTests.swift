@@ -68,7 +68,8 @@ private func reviewFleet(_ repo: String, branch: String = "main", command: Strin
 @MainActor @Test func popoverJobsSelectTheirMachineAndShareCheckoutExclusion() async throws {
   let directory = try modelReviewRepository()
   defer { try? FileManager.default.removeItem(at: directory) }
-  let model = Model()
+  let model = Model(
+    notifications: DeploymentNotifications(requestAuthorization: { false }, post: { _ in }))
   model.fleet = try Fleet.parse(
     """
     version: 1
@@ -167,7 +168,8 @@ private func modelReviewRepository() throws -> URL {
       "version: 1\nrepo: '\(path)'\nmachines: {\(name): {agent: 'http://127.0.0.1:1', sync: {preset: custom, repo: '\(path)', command: echo}}}"
     )
   }
-  let model = Model()
+  let model = Model(
+    notifications: DeploymentNotifications(requestAuthorization: { false }, post: { _ in }))
   let gate = ReviewGate()
   model.fleet = try fleet(directory.path, name: "root")
   let (entered, signal) = AsyncStream<Void>.makeStream()

@@ -90,7 +90,11 @@ import Observation
   }
   private(set) var generation = 0
   let fleetPath: String
-  init(path: String = Fleet.path) { fleetPath = path }
+  private let notifications: DeploymentNotifications
+  init(path: String = Fleet.path, notifications: DeploymentNotifications = .shared) {
+    fleetPath = path
+    self.notifications = notifications
+  }
   private var started = false
   private var polling = false
   private var comparing = false
@@ -303,6 +307,7 @@ import Observation
         logUpdates.cancel()
         job.text = job.output.text
       }
+      var failure: String?
       do {
         guard let claimed = await claim(steps.flatMap(\.checkouts), cancel: job.cancel) else {
           resolvingCheckout = false
@@ -312,9 +317,13 @@ import Observation
         resolvingCheckout = false
         try await run(steps, job.cancel, job.output)
         job.result = "Succeeded"
-      } catch { job.result = String(describing: error) }
+      } catch {
+        failure = String(describing: error)
+        job.result = failure
+      }
       job.running = false
       mutatingCheckouts.subtract(paths)
+      await notifications.completed(machine: name, action: action, failure: failure)
       await poll()
     }
   }
@@ -391,6 +400,7 @@ import Observation
     let token = commitGeneration
     Task {
       var checkoutPaths: Set<String> = []
+      var failure: String?
       do {
         guard let claimed = await claim([repo]) else {
           resolvingCheckout = false
