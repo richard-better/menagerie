@@ -36,3 +36,13 @@ import Testing
   } catch { #expect(String(describing: error) == "Cancelled") }
   #expect(Date().timeIntervalSince(start) < 3)
 }
+
+@Test func syncCountsAllPathsBeyondRetainedOutputLimit() throws {
+  let repo = try Repository()
+  defer { repo.remove() }
+  for index in 0..<10000 {
+    let name = String(format: "%05d", index) + String(repeating: "x", count: 220)
+    try repo.write(name, "")
+  }
+  #expect(try Commit.uncommittedCount(repo: repo.path, cancel: Cancellation()) == 10000)
+}

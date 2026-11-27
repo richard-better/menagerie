@@ -47,7 +47,8 @@ public struct CommandResult: Sendable {
 public enum Runner {
   /// All blocking process and pipe work is confined to the calling worker task.
   public static func run(
-    _ command: Command, onStart: @Sendable () -> Void = {}, cancel: Cancellation = Cancellation(),
+    _ command: Command, standardOutput: @Sendable (Data) -> Void = { _ in },
+    onStart: @Sendable () -> Void = {}, cancel: Cancellation = Cancellation(),
     abandonAfterCancellation: Bool = false,
     output: @Sendable (String) -> Void = { _ in }
   ) throws -> CommandResult {
@@ -161,6 +162,7 @@ public enum Runner {
       for index in 0..<2 where !eof[index] {
         let n = read(index == 0 ? out[0] : err[0], &buffer, buffer.count)
         if n > 0 {
+          if index == 0 { standardOutput(Data(buffer.prefix(n))) }
           output(String(decoding: buffer.prefix(n), as: UTF8.self))
           data[index].append(contentsOf: buffer.prefix(n))
           if data[index].count > 2 * 1024 * 1024 {

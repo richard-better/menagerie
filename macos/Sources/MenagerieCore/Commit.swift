@@ -1,5 +1,6 @@
 import Darwin
 import Foundation
+import Synchronization
 
 public struct Change: Sendable, Equatable, Identifiable {
   public var path: String
@@ -142,15 +143,23 @@ public enum Commit {
     return message
   }
   static func uncommittedCount(repo: String, cancel: Cancellation) throws -> Int {
-    try Runner.git(
-      repo,
-      [
-        "-c", "status.renames=false", "status", "--porcelain=v1", "-z", "--untracked-files=all",
-        "--ignore-submodules=none",
-      ], cancel: cancel
-    )
-    .split(separator: "\0").count
+    let count = Mutex(0)
+    let result = try Runner.run(
+      Command(
+        "/usr/bin/git",
+        [
+          "-C", repo,
+          "-c", "status.renames=false", "status", "--porcelain=v1", "-z", "--untracked-files=all",
+          "--ignore-submodules=none",
+        ], timeout: 60),
+      standardOutput: { bytes in
+        let records = bytes.reduce(0) { $0 + ($1 == 0 ? 1 : 0) }
+        count.withLock { $0 += records }
+      }, cancel: cancel)
+    _ = try result.checked()
+    return count.withLock { $0 }
   }
+
   public static func pushCheckout(
     repo: String, branch: String, cancel: Cancellation, output: @Sendable (String) -> Void
   ) throws {
