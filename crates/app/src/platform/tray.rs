@@ -3,13 +3,26 @@
 use futures::channel::mpsc::{UnboundedReceiver, UnboundedSender, unbounded};
 use objc2::MainThreadMarker;
 use tray_icon::menu::{Menu, PredefinedMenuItem};
-use tray_icon::{TrayIcon, TrayIconBuilder, TrayIconEvent};
+use tray_icon::{Icon, TrayIcon, TrayIconBuilder, TrayIconEvent};
 
 use super::{Flip, Rect};
 
-/// The menu bar label. A text title rather than an image keeps it crisp
-/// at every scale without shipping a template image yet.
-const GLYPH: &str = "◆";
+/// The mark, black on transparent at 2x the menu bar's height. A template
+/// image: macOS tints it to suit the menu bar. Rendered from
+/// `assets/brand/menagerie-mark.svg` by `scripts/brand-assets`.
+const MARK_PNG: &[u8] = include_bytes!("../../assets/menubar.png");
+
+fn mark() -> anyhow::Result<Icon> {
+    let mut reader = png::Decoder::new(std::io::Cursor::new(MARK_PNG)).read_info()?;
+    let mut rgba = vec![0; reader.output_buffer_size().unwrap_or(0)];
+    let frame = reader.next_frame(&mut rgba)?;
+    anyhow::ensure!(
+        frame.color_type == png::ColorType::Rgba && frame.bit_depth == png::BitDepth::Eight,
+        "the menu bar icon must be 8-bit RGBA"
+    );
+    rgba.truncate(frame.buffer_size());
+    Ok(Icon::from_rgba(rgba, frame.width, frame.height)?)
+}
 
 /// One edge of a left click on the status item.
 ///
@@ -37,7 +50,8 @@ impl Tray {
         // click, before tray-icon can tell left from right, so a left click
         // would show Quit instead of the popover. See `show_quit_menu`.
         let icon = TrayIconBuilder::new()
-            .with_title(GLYPH)
+            .with_icon(mark()?)
+            .with_icon_as_template(true)
             .with_tooltip("Menagerie")
             .build()?;
         Ok((Self { icon }, rx))
@@ -59,14 +73,11 @@ impl Tray {
         self.icon.set_menu(None);
     }
 
-    /// `◆` alone, or `◆ 2` when two machines need attention.
+    /// The mark alone, or the mark and `2` when two machines need
+    /// attention.
     pub fn set_count(&self, count: usize) {
-        let title = if count == 0 {
-            GLYPH.to_owned()
-        } else {
-            format!("{GLYPH} {count}")
-        };
-        self.icon.set_title(Some(&title));
+        let title = (count > 0).then(|| count.to_string());
+        self.icon.set_title(title.as_deref());
     }
 
     /// Where the icon is, in global top-left points.
@@ -113,4 +124,13 @@ fn set_click_handler(tx: UnboundedSender<Press>) {
         };
         let _ = tx.unbounded_send(press);
     }));
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn the_mark_decodes() {
+        let icon = super::mark();
+        assert!(icon.is_ok(), "{:?}", icon.err());
+    }
 }

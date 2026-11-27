@@ -35,6 +35,8 @@ futures = "0.3"
 # events; display-info provides monitor bounds with their real origins,
 # which gpui 0.2.2's Display::bounds() discards.
 tray-icon = "0.24"
+# Decodes the menu bar icon; already in the tree through gpui.
+png = "0.18"
 display-info = "0.5"
 raw-window-handle = "0.6"
 
