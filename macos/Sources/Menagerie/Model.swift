@@ -9,6 +9,7 @@ import Observation
   var observations: [String: LiveReport] = [:]
   var health: [String: String] = [:]
   var drift: [String: Counts] = [:]
+  var driftErrors: [String: String] = [:]
   var changes: [String: String] = [:]
   var checkout: Checkout?
   var updated: Date?
@@ -42,6 +43,20 @@ import Observation
   func status(_ name: String) -> MachineStatus {
     guard let machine = fleet?.machines[name] else { return .noAgent }
     return (observations[name] ?? LiveReport()).status(machine: machine, drift: drift)
+  }
+  func comparisonNote(_ name: String) -> String? {
+    guard fleet?.machines[name]?.sync != nil else { return nil }
+    guard let report = observations[name]?.report,
+      report.probes.revision.isFresh(now: report.agent.now),
+      let revision = report.probes.revision.value
+    else {
+      return
+        "This machine doesn't report which commit built it. Rebuild it from a configuration that sets system.configurationRevision."
+    }
+    guard fleet?.repoPath != nil else {
+      return "Add repo: to the fleet file to compare this machine with your checkout."
+    }
+    return driftErrors[revision.rev].map { "Can't compare with your checkout: \($0)" }
   }
   func start() {
     guard !started else { return }
@@ -77,6 +92,7 @@ import Observation
         observations = [:]
         health = [:]
         drift = [:]
+        driftErrors = [:]
         checkout = nil
         changes = [:]
       }
@@ -88,6 +104,7 @@ import Observation
         observations = [:]
         health = [:]
         drift = [:]
+        driftErrors = [:]
         checkout = nil
         changes = [:]
       }
@@ -115,6 +132,7 @@ import Observation
     }
     health = result.health
     drift = result.drift
+    driftErrors = result.driftErrors
     changes = result.changes
     checkout = result.checkout
     updated = Date()

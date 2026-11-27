@@ -86,4 +86,21 @@ private func session() -> URLSession {
   #expect(result.drift[old] == Counts(ahead: 0, behind: 2))
   #expect(result.checkout?.counts == Counts(ahead: 1, behind: 0))
   #expect(result.checkout?.dirty == false)
+  #expect(result.driftErrors.isEmpty)
+}
+
+@Test func unknownRevisionsRetainTheGitComparisonFailure() async throws {
+  let repo = try Repository()
+  defer { repo.remove() }
+  _ = try Runner.git(repo.path, ["update-ref", "refs/remotes/origin/main", "HEAD"])
+  let fleet = try Fleet.parse(
+    "version: 1\nrepo: '\(repo.path)'\nmachines: { unknown: {agent: 'http://good.test'} }")
+  let http = session()
+  defer { http.invalidateAndCancel() }
+  let result = await Poller.poll(fleet, known: [:], session: http)
+  #expect(result.drift.isEmpty)
+  #expect(result.driftErrors["abcdef1234"]?.isEmpty == false)
+  #expect(
+    result.observations["unknown"]?.status(machine: fleet.machines["unknown"]!, drift: result.drift)
+      == .online)
 }

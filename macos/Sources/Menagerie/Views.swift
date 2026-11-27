@@ -152,7 +152,11 @@ struct FleetView: View {
             }.buttonStyle(.glass)
             TerminalPage(session: session).frame(maxWidth: .infinity, maxHeight: .infinity)
           }
-        default: details
+        default:
+          ScrollView {
+            VStack(alignment: .leading, spacing: 20) { details }
+              .frame(maxWidth: .infinity, alignment: .leading)
+          }
         }
       }.padding(26).padding(.top, 10).frame(
         maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading
@@ -193,8 +197,17 @@ struct FleetView: View {
           }
         }
         Spacer()
-        Text(model.status(model.selected).label).font(.title).monospacedDigit().foregroundStyle(
-          model.status(model.selected).needsSync ? Palette.amber : Palette.ink)
+        VStack(alignment: .trailing, spacing: 8) {
+          Text(model.status(model.selected).label).font(.title).monospacedDigit().foregroundStyle(
+            model.status(model.selected).needsSync ? Palette.amber : Palette.ink)
+          if let report = model.observations[model.selected]?.report,
+            report.probes.revision.isFresh(now: report.agent.now),
+            let revision = report.probes.revision.value
+          {
+            Text((revision.generation.map { "generation \($0) · " } ?? "") + revision.rev.prefix(7))
+              .font(.caption.monospaced()).foregroundStyle(Palette.muted).textSelection(.enabled)
+          }
+        }
       }
       GlassEffectContainer {
         HStack {
@@ -214,6 +227,10 @@ struct FleetView: View {
         }.buttonStyle(.glass)
       }
       Divider()
+      if let note = model.comparisonNote(model.selected) {
+        Text(note).font(.callout).foregroundStyle(Palette.amber).textSelection(.enabled)
+          .fixedSize(horizontal: false, vertical: true)
+      }
       if let report = model.observations[model.selected]?.report {
         VStack(alignment: .leading) {
           HStack {
@@ -227,7 +244,7 @@ struct FleetView: View {
           Picker("History", selection: $hours) {
             Text("1h").tag(1)
             Text("24h").tag(24)
-          }.pickerStyle(.segmented).frame(width: 120)
+          }.pickerStyle(.segmented).labelsHidden().frame(width: 120)
           LoadChart(samples: report.loadHistory, now: report.agent.now, hours: hours).frame(
             height: 72)
         }

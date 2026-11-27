@@ -34,6 +34,7 @@ private actor Gate {
       var result = PollResult()
       result.observations["test"] = LiveReport(error: "old result")
       result.health["test/0"] = "old health"
+      result.driftErrors["abcdef1234"] = "old comparison error"
       return result
     })
   }
@@ -46,6 +47,7 @@ private actor Gate {
   await poll.value
   #expect(model.observations.isEmpty)
   #expect(model.health.isEmpty)
+  #expect(model.driftErrors.isEmpty)
   #expect(model.updated == nil)
   await model.poll(using: { _, _ in
     var result = PollResult()

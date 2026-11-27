@@ -40,6 +40,7 @@ public struct PollResult: Sendable {
   public var observations: [String: LiveReport] = [:]
   public var health: [String: String] = [:]
   public var drift: [String: Counts] = [:]
+  public var driftErrors: [String: String] = [:]
   public var changes: [String: String] = [:]
   public var checkout: Checkout?
 }
@@ -122,13 +123,16 @@ public enum Poller {
             $0.report?.probes.revision.value?.rev
           })
         for rev in revisions where Revision.isValid(rev) {
-          if let output = try? Runner.git(
-            repo,
-            ["rev-list", "--left-right", "--count", "--end-of-options", upstream + "..." + rev])
-          {
-            result.drift[rev] = try? Counts.parse(output)
+          do {
+            let output = try Runner.git(
+              repo,
+              ["rev-list", "--left-right", "--count", "--end-of-options", upstream + "..." + rev])
+            result.drift[rev] = try Counts.parse(output)
             result.changes[rev] = try? Runner.git(
               repo, ["log", "--format=%h %s", "--end-of-options", rev + ".." + upstream])
+          } catch {
+            result.driftErrors[rev] = String(describing: error).trimmingCharacters(
+              in: .whitespacesAndNewlines)
           }
         }
         if let output = try? Runner.git(
@@ -141,6 +145,7 @@ public enum Poller {
         return result
       }.value
       result.drift = git.drift
+      result.driftErrors = git.driftErrors
       result.changes = git.changes
       result.checkout = git.checkout
     }
