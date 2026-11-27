@@ -1100,20 +1100,28 @@ fn job_log(job: &crate::store::Job) -> impl IntoElement {
         .unwrap_or_else(std::time::Instant::now)
         .duration_since(job.started)
         .as_secs();
+    let red = rgb(0xe5534b);
+    let action = job.action.label();
     let (state, colour) = match &job.result {
-        None => (
-            format!("{} running · {elapsed}s", job.action.label()),
-            theme::mute(),
-        ),
-        Some(Ok(())) => (
-            format!("{} finished · {elapsed}s", job.action.label()),
-            theme::green(),
-        ),
-        Some(Err(why)) => (why.clone(), rgb(0xe5534b)),
+        None => (format!("{action} running · {elapsed}s"), theme::mute()),
+        Some(Ok(())) => (format!("{action} finished · {elapsed}s"), theme::green()),
+        Some(Err(why)) if why == "Cancelled" => (format!("{action} cancelled"), theme::mute()),
+        Some(Err(_)) => (format!("{action} failed · {elapsed}s"), red),
     };
     let running = job.running();
     let cancel = job.cancel.clone();
-    let tail: Vec<String> = job.lines.iter().rev().take(400).rev().cloned().collect();
+    let mut tail: Vec<String> = job.lines.iter().rev().take(400).rev().cloned().collect();
+    // The reason a step failed is the last thing it said, already the last
+    // line here: it turns red. A step that failed silently gets the error.
+    let mut failed_line = None;
+    if let Some(Err(why)) = &job.result
+        && why != "Cancelled"
+    {
+        if tail.last().is_none_or(|l| l.starts_with('▸')) {
+            tail.push(why.clone());
+        }
+        failed_line = Some(tail.len() - 1);
+    }
     div()
         .flex()
         .flex_col()
@@ -1122,11 +1130,25 @@ fn job_log(job: &crate::store::Job) -> impl IntoElement {
                 .flex()
                 .justify_between()
                 .items_center()
+                .mb(px(10.))
                 .child(
                     div()
-                        .text_size(px(14.))
-                        .font_weight(FontWeight::BOLD)
-                        .child("Log"),
+                        .flex()
+                        .items_baseline()
+                        .gap(px(10.))
+                        .child(
+                            div()
+                                .text_size(px(14.))
+                                .font_weight(FontWeight::BOLD)
+                                .child("Log"),
+                        )
+                        .child(
+                            div()
+                                .font_family(theme::MONO)
+                                .text_size(px(11.))
+                                .text_color(colour)
+                                .child(state),
+                        ),
                 )
                 .when(running, |el| {
                     el.child(
@@ -1134,16 +1156,6 @@ fn job_log(job: &crate::store::Job) -> impl IntoElement {
                             .on_click(move |_, _, _| cancel.cancel()),
                     )
                 }),
-        )
-        // On its own line: a failure's reason can be a full sentence.
-        .child(
-            div()
-                .mt(px(4.))
-                .mb(px(10.))
-                .font_family(theme::MONO)
-                .text_size(px(11.5))
-                .text_color(colour)
-                .child(state),
         )
         .child(
             div()
@@ -1170,6 +1182,7 @@ fn job_log(job: &crate::store::Job) -> impl IntoElement {
                     div()
                         .id(("log-line", i))
                         .when(step, |el| el.text_color(theme::ink()).mt(px(4.)))
+                        .when(failed_line == Some(i), |el| el.text_color(red))
                         .when_some(url, |el, url| {
                             el.text_color(rgb(0x6fa0ff))
                                 .cursor_pointer()
