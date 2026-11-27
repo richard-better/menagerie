@@ -46,12 +46,14 @@ pub struct FleetWindow {
     show_changes: bool,
     show_log: bool,
     show_more: bool,
-    /// Open shells, by machine; closing one ends its session.
-    /// Open shells by machine, with where each one runs. Closing one ends it.
+    /// Open shells by machine, with where each one runs. Dropping one ends
+    /// it.
     terminals: std::collections::HashMap<
         String,
         (Entity<crate::terminal::TerminalView>, crate::sync::Place),
     >,
+    /// Machines whose panel shows their shell instead of their details.
+    in_terminal: std::collections::HashSet<String>,
     _observe: Subscription,
     /// Re-renders every few seconds so "Updated 8s ago" stays true.
     _ticker: Task<()>,
@@ -67,6 +69,8 @@ impl FleetWindow {
                     crate::sync::place(name, m, &store.hostname).as_ref() == Ok(place)
                 })
             });
+            let terminals = &this.terminals;
+            this.in_terminal.retain(|name| terminals.contains_key(name));
             cx.notify()
         });
         let ticker = cx.spawn(async move |this, cx| {
@@ -84,6 +88,7 @@ impl FleetWindow {
             show_log: false,
             show_more: false,
             terminals: std::collections::HashMap::new(),
+            in_terminal: std::collections::HashSet::new(),
             _observe: observe,
             _ticker: ticker,
         }
@@ -273,9 +278,6 @@ impl FleetWindow {
         if let Some(text) = notice(store, name, machine, status) {
             body = body.child(section().child(notice_box(text)));
         }
-        if let Some((terminal, _)) = self.terminals.get(name) {
-            body = body.child(section().child(terminal.clone()));
-        }
         // Open while it runs, and after a failure until the next sync.
         if let Some(job) = store.jobs.get(name)
             && (self.show_log || job.running() || matches!(job.result, Some(Err(_))))
@@ -298,6 +300,72 @@ impl FleetWindow {
             body = body.child(section().child(services(store, name, machine)));
         }
         body.into_any_element()
+    }
+
+    /// The bar above a machine's shell: back to its details, where the
+    /// shell runs, and ending it.
+    fn terminal_bar(
+        &self,
+        name: &str,
+        place: &crate::sync::Place,
+        cx: &Context<Self>,
+    ) -> impl IntoElement {
+        let back = cx.entity().downgrade();
+        let target = name.to_owned();
+        let end = name.to_owned();
+        let place = match place {
+            crate::sync::Place::Here => "this Mac".to_owned(),
+            crate::sync::Place::Ssh(to) => format!("ssh {to}"),
+        };
+        div()
+            .flex_none()
+            .h(px(44.))
+            .flex()
+            .items_center()
+            .gap(px(10.))
+            .px(px(12.))
+            .border_b_1()
+            .border_color(theme::line())
+            .child(icon_button("back", icon::BACK, 26., move |_, _, cx| {
+                let _ = back.update(cx, |this, cx| this.leave_terminal(&target, cx));
+            }))
+            .child(
+                div()
+                    .text_size(px(13.))
+                    .font_weight(FontWeight::BOLD)
+                    .child(name.to_owned()),
+            )
+            .child(
+                div()
+                    .flex_1()
+                    .font_family(theme::MONO)
+                    .text_size(px(11.))
+                    .text_color(theme::mute())
+                    .truncate()
+                    .child(place),
+            )
+            .child(
+                text_button("end-session", "End session", true).on_click(cx.listener(
+                    move |this, _, _, cx| {
+                        this.in_terminal.remove(&end);
+                        this.terminals.remove(&end);
+                        cx.notify();
+                    },
+                )),
+            )
+    }
+
+    /// Back to the details. The shell keeps running unless it has ended.
+    fn leave_terminal(&mut self, name: &str, cx: &mut Context<Self>) {
+        self.in_terminal.remove(name);
+        if self
+            .terminals
+            .get(name)
+            .is_some_and(|(view, _)| view.read(cx).ended())
+        {
+            self.terminals.remove(name);
+        }
+        cx.notify();
     }
 
     /// Changes, Log, Sync and the ⋯ menu.
@@ -335,18 +403,13 @@ impl FleetWindow {
                 }),
             )
             .child({
-                let open = self.terminals.contains_key(name);
+                let running = self.terminals.contains_key(name);
                 let target = name.to_owned();
-                // An open session can always be closed.
-                let enabled = open || reachable;
-                text_button(
-                    "terminal",
-                    if open { "Close terminal" } else { "Terminal" },
-                    enabled,
-                )
-                .when(enabled, |b| {
+                // A running shell can always be gone back to.
+                let enabled = running || reachable;
+                text_button("terminal", "Terminal", enabled).when(enabled, |b| {
                     b.on_click(cx.listener(move |this, _, window, cx| {
-                        this.toggle_terminal(&target, window, cx)
+                        this.open_terminal(&target, window, cx)
                     }))
                 })
             })
@@ -384,9 +447,11 @@ impl FleetWindow {
             .into_any_element()
     }
 
-    /// Open a shell on `name` (here, or over SSH), or close the open one.
-    fn toggle_terminal(&mut self, name: &str, window: &mut Window, cx: &mut Context<Self>) {
-        if self.terminals.remove(name).is_some() {
+    /// Show `name`'s shell, starting one (here, or over SSH) if none runs.
+    fn open_terminal(&mut self, name: &str, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some((view, _)) = self.terminals.get(name) {
+            self.in_terminal.insert(name.to_owned());
+            window.focus(&gpui::Focusable::focus_handle(view.read(cx), cx));
             cx.notify();
             return;
         }
@@ -405,6 +470,7 @@ impl FleetWindow {
         let view = cx.new(|cx| crate::terminal::TerminalView::new(&place, dir, cx));
         self.terminals
             .insert(name.to_owned(), (view.clone(), place));
+        self.in_terminal.insert(name.to_owned());
         window.focus(&gpui::Focusable::focus_handle(view.read(cx), cx));
         cx.notify();
     }
@@ -679,16 +745,29 @@ impl Render for FleetWindow {
         if has_machines {
             root = root.child(self.strip(store, cx));
             if let Some((name, machine)) = selected {
-                root = root.child(
-                    div()
-                        .id("panel")
-                        .flex_1()
+                let panel = div()
+                    .id("panel")
+                    .flex_1()
+                    .min_h_0()
+                    .border_t_1()
+                    .border_color(theme::line())
+                    .bg(theme::panel());
+                let shell = self
+                    .terminals
+                    .get(&name)
+                    .filter(|_| self.in_terminal.contains(&name));
+                root = root.child(match shell {
+                    // The shell takes the whole panel, under a bar that
+                    // leads back to the details.
+                    Some((terminal, place)) => panel
+                        .flex()
+                        .flex_col()
+                        .child(self.terminal_bar(&name, place, cx))
+                        .child(div().flex_1().min_h_0().child(terminal.clone())),
+                    None => panel
                         .overflow_y_scroll()
-                        .border_t_1()
-                        .border_color(theme::line())
-                        .bg(theme::panel())
                         .child(self.panel(store, &name, &machine, cx)),
-                );
+                });
             }
         } else {
             root = root.child(self.empty_state(store, cx));

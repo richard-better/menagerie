@@ -13,6 +13,7 @@ pub mod icon {
     pub const SYNC: &str = "icons/sync.svg";
     pub const MORE: &str = "icons/more.svg";
     pub const EXTERNAL: &str = "icons/external.svg";
+    pub const BACK: &str = "icons/back.svg";
 }
 
 const ICONS: &[(&str, &str)] = &[
@@ -23,6 +24,7 @@ const ICONS: &[(&str, &str)] = &[
     (icon::SYNC, include_str!("../assets/icons/sync.svg")),
     (icon::MORE, include_str!("../assets/icons/more.svg")),
     (icon::EXTERNAL, include_str!("../assets/icons/external.svg")),
+    (icon::BACK, include_str!("../assets/icons/back.svg")),
 ];
 
 pub struct Assets;
