@@ -16,7 +16,7 @@ int menagerie_admin_start(const char *prompt, char *const *arguments, FILE **cha
     if (!status) {
 #pragma clang diagnostic push
 #pragma clang diagnostic ignored "-Wdeprecated-declarations"
-        status = AuthorizationExecuteWithPrivileges(auth, "/bin/sh", 0, arguments, channel);
+        status = AuthorizationExecuteWithPrivileges(auth, "/usr/bin/env", 0, arguments, channel);
 #pragma clang diagnostic pop
     }
     if (status) AuthorizationFree(auth, kAuthorizationFlagDestroyRights);

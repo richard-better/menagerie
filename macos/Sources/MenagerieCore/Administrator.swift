@@ -3,45 +3,70 @@ import Darwin
 import Foundation
 
 public enum Administrator {
-  private static let wrapper = #"""
-    exec 2>&1
-    echo "menagerie-admin-pid: $$"
-    set -m
-    /usr/bin/perl -e '
-      $ENV{PATH} = "/usr/bin:/bin:/usr/sbin:/sbin"; delete @ENV{qw(IFS CDPATH ENV BASH_ENV)};
-      my @argv = map { /\A(.*)\z/s; $1 } @ARGV;
-      $< = $> = 0; $( = $) = "0 0";
-      exec { $argv[0] } @argv or die "$argv[0]: $!\n"' "$@" < /dev/null &
-    job=$!
-    set +m
-    ( read -r _; kill -TERM -- -"$job"; sleep 3; kill -KILL -- -"$job" ) <&0 >/dev/null 2>&1 &
-    watcher=$!
-    wait "$job" 2>/dev/null
-    status=$?
-    kill "$watcher" 2>/dev/null
-    echo "menagerie-admin-exit: $status"
+  static let supervisor = #"""
+    use POSIX qw(:sys_wait_h setpgid);
+    use IO::Select;
+    use Time::HiRes qw(time);
+    open(STDERR, ">&STDOUT") or die "stderr: $!";
+    $| = 1;
+    $< = $>;
+    if ($> == 0) { POSIX::setgid(0) == 0 or die "setgid: $!"; }
+    print "menagerie-admin-pid: $$\n";
+    my $start = <STDIN>;
+    exit 0 unless defined($start) && $start eq "start\n";
+    my $job = fork(); defined($job) or die "fork: $!";
+    if ($job == 0) {
+      setpgid(0, 0) == 0 or die "setpgid: $!";
+      open(STDIN, "<", "/dev/null") or die "stdin: $!";
+      exec { $ARGV[0] } @ARGV; die "exec: $!";
+    }
+    setpgid($job, $job);
+    my $control = IO::Select->new(\*STDIN);
+    my ($status, $stopping);
+    while (1) {
+      if (!defined($status) && waitpid($job, WNOHANG) == $job) { $status = $?; }
+      last if defined($status) && !kill(0, -$job);
+      if (!defined($stopping) && (defined($status) || $control->can_read(0.05))) {
+        $stopping = time; kill 'TERM', -$job;
+      }
+      if (defined($stopping)) {
+        kill 'KILL', -$job if time - $stopping >= 1;
+        select(undef, undef, undef, 0.05);
+      }
+    }
+    print "menagerie-admin-exit: ", (($status & 127) ? 128 + ($status & 127) : $status >> 8), "\n";
     """#
+  static func needsAuthorization(_ result: CommandResult) -> Bool {
+    result.status == 1 && result.output.isEmpty
+      && result.errorOutput.trimmingCharacters(in: .whitespacesAndNewlines)
+        == "sudo: a password is required"
+  }
+  static var rootEnvironment: [String: String] {
+    let user = getpwuid(getuid())!
+    let name = String(cString: user.pointee.pw_name)
+    let gid = user.pointee.pw_gid
+    let home = getpwnam("root").map { String(cString: $0.pointee.pw_dir) } ?? "/var/root"
+    return [
+      "PATH":
+        "/run/current-system/sw/bin:/nix/var/nix/profiles/default/bin:/usr/bin:/bin:/usr/sbin:/sbin",
+      "HOME": home, "USER": "root", "LOGNAME": "root", "SUDO_USER": name,
+      "SUDO_UID": String(getuid()), "SUDO_GID": String(gid), "LC_ALL": "C",
+    ]
+  }
   public static func run(
     _ command: Command, cancel: Cancellation, output: @Sendable (String) -> Void
   ) throws -> CommandResult {
-    let check = try Runner.run(
-      Command("/usr/bin/sudo", ["-n", "-l", "--", command.program] + command.arguments),
-      cancel: cancel)
-    if check.status == 0 {
-      return try Runner.run(
-        Command(
-          "/usr/bin/sudo", ["-n", command.program] + command.arguments, timeout: command.timeout),
-        cancel: cancel, output: output)
-    }
+    var sudo = Command(
+      "/usr/bin/sudo", ["-n", "--", command.program] + command.arguments,
+      timeout: command.timeout)
+    sudo.environment = rootEnvironment
+    let result = try Runner.run(
+      sudo, cancel: cancel, abandonAfterCancellation: true, output: output)
+    guard needsAuthorization(result) else { return result }
     guard !cancel.isCancelled else { throw FleetError("Cancelled") }
-    var environment = ["SUDO_UID=\(getuid())", "SUDO_GID=\(getgid())"]
-    for name in ["USER", "HOME"] {
-      if let value = ProcessInfo.processInfo.environment[name] {
-        environment.append("\(name == "USER" ? "SUDO_USER" : name)=\(value)")
-      }
-    }
     let arguments =
-      ["-c", wrapper, "sh", "/usr/bin/env"] + environment + [command.program] + command.arguments
+      ["-i"] + rootEnvironment.map { "\($0.key)=\($0.value)" }
+      + ["/usr/bin/perl", "-e", supervisor, "--", command.program] + command.arguments
     guard !arguments.contains(where: { $0.utf8.contains(0) }) else {
       throw FleetError("NUL in administrator argument")
     }
@@ -63,6 +88,16 @@ public enum Administrator {
     let fd = fileno(channel)
     _ = fcntl(fd, F_SETFD, FD_CLOEXEC)
     _ = fcntl(fd, F_SETFL, O_NONBLOCK)
+    _ = fcntl(fd, F_SETNOSIGPIPE, 1)
+    if !cancel.isCancelled {
+      let startLine = Array("start\n".utf8)
+      guard startLine.withUnsafeBytes({ write(fd, $0.baseAddress!, $0.count) }) == startLine.count
+      else {
+        throw FleetError("Administrator control pipe closed before start")
+      }
+    } else {
+      shutdown(fd, SHUT_WR)
+    }
     var bytes = [UInt8](repeating: 0, count: 16384)
     var pending = Data()
     var tail = ""
@@ -101,7 +136,7 @@ public enum Administrator {
     }
     if let pid {
       var status: Int32 = 0
-      _ = waitpid(pid, &status, 0)
+      _ = waitpid(pid, &status, WNOHANG)
     }
     guard !cancel.isCancelled else { throw FleetError("Cancelled") }
     guard let exit else { throw FleetError("Administrator command ended without reporting status") }

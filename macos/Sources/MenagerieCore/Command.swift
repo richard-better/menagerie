@@ -7,6 +7,7 @@ public struct Command: Sendable, Equatable {
   public var arguments: [String]
   public var directory: String?
   public var input: Data
+  public var environment: [String: String]? = nil
   public var timeout: TimeInterval
   public init(
     _ program: String, _ arguments: [String] = [], directory: String? = nil, input: Data = Data(),
@@ -47,6 +48,7 @@ public enum Runner {
   /// All blocking process and pipe work is confined to the calling worker task.
   public static func run(
     _ command: Command, cancel: Cancellation = Cancellation(),
+    abandonAfterCancellation: Bool = false,
     output: @Sendable (String) -> Void = { _ in }
   ) throws -> CommandResult {
     guard !cancel.isCancelled else { throw FleetError("Cancelled") }
@@ -84,10 +86,12 @@ public enum Runner {
       &attributes, Int16(POSIX_SPAWN_SETPGROUP | POSIX_SPAWN_CLOEXEC_DEFAULT))
     posix_spawnattr_setpgroup(&attributes, 0)
     let argv = ([command.program] + command.arguments).map { strdup($0) } + [nil]
-    var environment = ProcessInfo.processInfo.environment
-    environment["GIT_TERMINAL_PROMPT"] = "0"
-    environment["GIT_NO_LAZY_FETCH"] = "1"
-    environment["GIT_LITERAL_PATHSPECS"] = "1"
+    var environment = command.environment ?? ProcessInfo.processInfo.environment
+    if command.environment == nil {
+      environment["GIT_TERMINAL_PROMPT"] = "0"
+      environment["GIT_NO_LAZY_FETCH"] = "1"
+      environment["GIT_LITERAL_PATHSPECS"] = "1"
+    }
     let envp = environment.map { strdup("\($0.key)=\($0.value)") } + [nil]
     defer { for p in argv + envp { free(p) } }
     var pid: pid_t = 0
@@ -125,6 +129,11 @@ public enum Runner {
         kill(-pid, SIGTERM)
       }
       if let stopped, Date().timeIntervalSince(stopped) >= 1 { kill(-pid, SIGKILL) }
+      // Unprivileged sudo cancellation cannot kill root descendants; they may still be finishing.
+      if let stopped, abandonAfterCancellation, Date().timeIntervalSince(stopped) >= 2 {
+        if !exited { _ = waitpid(pid, &status, WNOHANG) }
+        throw FleetError("Cancelled or timed out; root processes may still be finishing")
+      }
       if offset == command.input.count && input[1] >= 0 {
         close(input[1])
         input[1] = -1
