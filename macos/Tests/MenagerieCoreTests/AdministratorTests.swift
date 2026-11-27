@@ -31,6 +31,7 @@ import Testing
     Command(
       "/usr/bin/perl", ["-T", "-e", Administrator.supervisor, "--", "/bin/echo", "must-not-run"]))
   #expect(result.status == 0 && !result.output.contains("must-not-run"))
+  #expect(result.output.hasPrefix("menagerie-admin-pid: "))
 }
 @Test func privilegedSupervisorOutlivesLeaderAndKillsIgnoringDescendants() throws {
   let process = Process()

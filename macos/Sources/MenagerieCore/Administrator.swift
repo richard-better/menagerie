@@ -14,7 +14,7 @@ public enum Administrator {
     my @argv = map { /\A(.*)\z/s; $1 } @ARGV;
     $< = $>;
     if ($> == 0) { POSIX::setgid(0) == 0 or die "setgid: $!"; }
-    print "\nmenagerie-admin-pid: $$\n";
+    print "menagerie-admin-pid: $$\n";
     my $start = <STDIN>;
     exit 0 unless defined($start) && $start eq "start\n";
     my $job = fork(); defined($job) or die "fork: $!";
