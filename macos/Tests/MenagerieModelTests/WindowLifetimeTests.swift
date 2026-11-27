@@ -1,5 +1,7 @@
 import AppKit
 import MenagerieCore
+import Observation
+import Synchronization
 import Testing
 
 @testable import Menagerie
@@ -36,4 +38,21 @@ import Testing
   #expect(model.terminals.isEmpty)
   #expect(model.message.isEmpty && model.included.isEmpty)
   #expect(model.jobs["test"] === job && !job.cancel.isCancelled)
+}
+
+@MainActor @Test func closingAnIdleWindowDoesNotInvalidateTheClosedScene() {
+  let model = Model()
+  let notifications = Mutex(0)
+  withObservationTracking {
+    _ = model.terminals
+    _ = model.page
+    _ = model.files
+    _ = model.included
+    _ = model.message
+    _ = model.commitNote
+  } onChange: {
+    notifications.withLock { $0 += 1 }
+  }
+  model.closeWindow()
+  #expect(notifications.withLock { $0 } == 0)
 }

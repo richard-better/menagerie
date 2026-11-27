@@ -24,13 +24,13 @@ import Observation
   var terminals: [String: TerminalSession] = [:]
   func closeWindow() {
     for terminal in terminals.values { terminal.transport.stop() }
-    terminals.removeAll()
-    page = "details"
+    if !terminals.isEmpty { terminals.removeAll() }
+    if page != "details" { page = "details" }
     if !committing && !drafting {
-      files = []
-      included = []
-      message = ""
-      commitNote = ""
+      if !files.isEmpty { files = [] }
+      if !included.isEmpty { included = [] }
+      if !message.isEmpty { message = "" }
+      if !commitNote.isEmpty { commitNote = "" }
     }
   }
   func openTerminal() {
