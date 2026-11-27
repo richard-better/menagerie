@@ -33,15 +33,19 @@ import SwiftUI
     item.button?.action = #selector(click)
     item.button?.sendAction(on: [.leftMouseUp, .rightMouseUp])
     popover.behavior = .transient
-    popover.contentViewController = NSHostingController(
+    let hosting = NSHostingController(
       rootView: PopoverRoot(
         model: model, dismiss: { [weak self] in self?.popover.performClose(nil) }))
+    hosting.sizingOptions = .preferredContentSize
+    popover.contentViewController = hosting
     model.start()
     if ProcessInfo.processInfo.arguments.contains("--show-window") { NSApp.activate() }
     observeStatus()
     if ProcessInfo.processInfo.arguments.contains("--show-popover") {
-      DispatchQueue.main.async { [weak self] in
+      Task { @MainActor [weak self] in
+        try? await Task.sleep(for: .milliseconds(500))
         guard let self, let button = self.item.button else { return }
+        NSApp.activate()
         self.popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
       }
     }
@@ -82,6 +86,7 @@ import SwiftUI
     } else if popover.isShown {
       popover.performClose(nil)
     } else if let button = item.button {
+      NSApp.activate()
       popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
     }
   }
