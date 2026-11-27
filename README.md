@@ -22,6 +22,8 @@ cargo run -p menagerie --bin preview -- target/preview   # PNGs of both views
 cargo test --workspace
 ```
 
+`scripts/bundle` builds `target/Menagerie.app` signed with your Developer ID, and `scripts/bundle --notarize` also notarizes it (with a notarytool keychain profile named `menagerie`). macOS offers Touch ID in the administrator prompt only to notarized apps; other builds get a password field.
+
 The preview uses `screencapture`, which needs the Screen Recording permission for the terminal that runs it.
 
 ## Credits
