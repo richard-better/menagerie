@@ -37,6 +37,7 @@ public struct Checkout: Sendable {
   public var dirty: Bool
 }
 public struct PollResult: Sendable {
+  public init() {}
   public var observations: [String: LiveReport] = [:]
   public var health: [String: String] = [:]
   public var drift: [String: Counts] = [:]

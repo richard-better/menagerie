@@ -17,7 +17,7 @@ func existingGitOperationsAreNeverMutatedOrAborted(marker: String) throws {
 @Test func mutationsSerializeCanonicalCheckoutPaths() throws {
   let repo = try Repository()
   defer { repo.remove() }
-  try CheckoutMutation.run(repos: [repo.path]) {
+  _ = try CheckoutMutation.run(repos: [repo.path]) {
     #expect(throws: (any Error).self) { try CheckoutMutation.run(repos: [repo.path + "/."]) {} }
   }
   try CheckoutMutation.run(repos: [repo.path]) {}

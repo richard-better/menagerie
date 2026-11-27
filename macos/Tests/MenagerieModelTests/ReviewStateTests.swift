@@ -116,3 +116,35 @@ func commitRefusesChangedCheckoutSettings(setting: String) async throws {
   await task.value
   #expect(model.message == before)
 }
+
+@MainActor @Test func blockedGitDoesNotBlockSubsequentNetworkPolls() async throws {
+  let model = Model()
+  model.fleet = try reviewFleet("/unused")
+  let gate = ReviewGate()
+  let (entered, signal) = AsyncStream<Void>.makeStream()
+  let pending = model.refreshComparison(using: { _, _, _ in
+    signal.yield()
+    await gate.wait()
+    return PollResult()
+  })
+  let comparison = try #require(pending)
+  for await _ in entered.prefix(1) {}
+  let duplicate = model.refreshComparison(using: { _, _, _ in
+    Issue.record("Overlapping Git comparison")
+    return PollResult()
+  })
+  #expect(duplicate == nil)
+  await model.poll(using: { _, _ in
+    var result = PollResult()
+    result.health["machine/0"] = "first"
+    return result
+  })
+  await model.poll(using: { _, _ in
+    var result = PollResult()
+    result.health["machine/0"] = "second"
+    return result
+  })
+  #expect(model.health["machine/0"] == "second")
+  await gate.release()
+  await comparison.value
+}

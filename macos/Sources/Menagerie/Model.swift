@@ -79,6 +79,7 @@ import Observation
   init(path: String = Fleet.path) { fleetPath = path }
   private var started = false
   private var polling = false
+  private var comparing = false
   var attention: Int { fleet?.order.filter { status($0).needsSync }.count ?? 0 }
   var summary: String {
     let online = fleet?.order.filter { status($0).online }.count ?? 0
@@ -173,7 +174,7 @@ import Observation
         fleet, known: observations,
         onHealth: { [weak self] health in
           await self?.publishHealth(health, generation: generation)
-        })
+        }, comparison: { _, _, _ in PollResult() })
     }
     guard generation == self.generation else { return }
     for (name, var observation) in result.observations {
@@ -184,11 +185,34 @@ import Observation
       observations[name] = observation
     }
     health = result.health
+    if fetch != nil {
+      applyComparison(result)
+    } else {
+      refreshComparison()
+    }
+    updated = Date()
+  }
+  @discardableResult func refreshComparison(
+    using compare:
+      @escaping @Sendable (Fleet, [String: LiveReport], [String: LiveReport]) async -> PollResult =
+      Poller.compare
+  ) -> Task<Void, Never>? {
+    guard !comparing, let fleet else { return nil }
+    comparing = true
+    let generation = generation
+    let snapshot = observations
+    return Task {
+      defer { comparing = false }
+      let result = await compare(fleet, snapshot, [:])
+      guard generation == self.generation else { return }
+      applyComparison(result)
+    }
+  }
+  private func applyComparison(_ result: PollResult) {
     drift = result.drift
     driftErrors = result.driftErrors
     changes = result.changes
     checkout = result.checkout
-    updated = Date()
   }
   private func publishHealth(_ result: [String: String], generation: Int) {
     guard generation == self.generation else { return }
