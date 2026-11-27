@@ -8,7 +8,7 @@ import Testing
 
 @MainActor @Test func shellModelDoesNotRetainItsTerminalView() throws {
   let machine = try Fleet.parse("version: 1\nmachines: {test: {}}").machines["test"]!
-  let session = TerminalSession(machine: machine, name: "test", directory: nil)
+  let session = TerminalSession(machine: machine, name: "test")
   weak var oldView: TerminalGridView?
   autoreleasepool {
     let view = session.view
@@ -29,7 +29,7 @@ import Testing
   model.page = "terminal"
   model.message = "draft"
   model.included = ["file"]
-  model.terminals["test"] = TerminalSession(machine: machine, name: "test", directory: nil)
+  model.terminals["test"] = TerminalSession(machine: machine, name: "test")
   let job = Job()
   model.jobs["test"] = job
   model.closeWindow()

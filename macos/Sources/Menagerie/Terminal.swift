@@ -13,14 +13,16 @@ import SwiftUI
     return view
   }
   let transport = PTYSession()
-  init(machine: Machine, name: String, directory: String?) {
+  static func command(machine: Machine, name: String) -> Command? {
     if Deployment.isLocal(name, machine) {
-      transport.start(
-        Command(
-          ProcessInfo.processInfo.environment["SHELL"] ?? "/bin/zsh", ["-l"], directory: directory))
-    } else if let ssh = machine.ssh {
-      transport.start(Command("/usr/bin/ssh", ["-tt", "--", ssh]))
+      return Command(
+        ProcessInfo.processInfo.environment["SHELL"] ?? "/bin/zsh", ["-l"],
+        directory: machine.sync?.repo.map(expandHome) ?? NSHomeDirectory())
     }
+    return machine.ssh.map { Command("/usr/bin/ssh", ["-tt", "--", $0]) }
+  }
+  init(machine: Machine, name: String) {
+    if let command = Self.command(machine: machine, name: name) { transport.start(command) }
   }
   deinit { transport.stop() }
 }
