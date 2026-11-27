@@ -269,9 +269,6 @@ public enum Commit {
     }
     let commit = try git(arguments).trimmingCharacters(in: .whitespacesAndNewlines)
     try rejectDirectories()
-    _ = try git([
-      "update-ref", "-m", "commit: " + oneLine(message), "refs/heads/" + branch, commit, head,
-    ])
     // Update exact index entries, preserving unrelated staged files and avoiding directory pathspecs.
     let entries = try git(["ls-tree", "-r", "-z", commit, "--"] + paths)
     var index = paths.map { "0 " + String(repeating: "0", count: head.count) + "\t" + $0 + "\0" }
@@ -281,11 +278,57 @@ public enum Commit {
       guard fields.count == 3 else { continue }
       index += String(fields[0]) + " " + String(fields[2]) + "\0"
     }
-    _ = try Runner.run(
-      Command(
-        "/usr/bin/git", ["-C", repo, "update-index", "-z", "--index-info"], input: Data(index.utf8)),
-      cancel: cancel
-    ).checked()
+    let realIndex = try Runner.git(
+      repo, ["rev-parse", "--path-format=absolute", "--git-path", "index"], cancel: cancel
+    ).trimmingCharacters(in: .whitespacesAndNewlines)
+    let lockPath = realIndex + ".lock"
+    let descriptor = open(lockPath, O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC, 0o600)
+    guard descriptor >= 0 else { throw FleetError("Cannot lock Git index: \(lockPath)") }
+    var removeLock = true
+    defer {
+      close(descriptor)
+      if removeLock { unlink(lockPath) }
+    }
+    let prepared = temporary.appendingPathComponent("prepared-index")
+    if FileManager.default.fileExists(atPath: realIndex) {
+      try FileManager.default.copyItem(at: URL(fileURLWithPath: realIndex), to: prepared)
+    }
+    environment["GIT_INDEX_FILE"] = prepared.path
+    if !FileManager.default.fileExists(atPath: prepared.path) {
+      _ = try git(["read-tree", "--empty"])
+    }
+    _ = try git(["update-index", "-z", "--index-info"], input: Data(index.utf8))
+    let handle = FileHandle(fileDescriptor: descriptor, closeOnDealloc: false)
+    try handle.write(contentsOf: Data(contentsOf: prepared))
+    try handle.synchronize()
+    var refFailure: (any Error)?
+    do {
+      _ = try git([
+        "update-ref", "-m", "commit: " + oneLine(message), "refs/heads/" + branch, commit, head,
+      ])
+    } catch {
+      let current = try? Runner.git(repo, ["rev-parse", "refs/heads/" + branch])
+        .trimmingCharacters(in: .whitespacesAndNewlines)
+      if current == head { throw error }
+      removeLock = false
+      guard current == commit else {
+        throw FleetError(
+          "Could not confirm whether commit \(commit) advanced the branch. Nothing was pushed. Preserve \(lockPath) and inspect the branch and index before running Git again: \(error)"
+        )
+      }
+      refFailure = error
+    }
+    removeLock = false
+    if rename(lockPath, realIndex) != 0 {
+      throw FleetError(
+        "Committed \(commit), but could not install the Git index; nothing was pushed. Install the prepared index at \(lockPath) over \(realIndex) before running Git again. Do not discard it."
+      )
+    }
+    if let refFailure {
+      throw FleetError(
+        "Committed \(commit) and installed its index, but push was not attempted: \(refFailure). The commit remains in your checkout."
+      )
+    }
     _ = try? Runner.git(repo, ["hook", "run", "--ignore-missing", "post-commit"], cancel: cancel)
   }
   private static func commitAndPushUnlocked(

@@ -90,3 +90,55 @@ import Testing
   }
   #expect(try Runner.git(repo.path, ["rev-parse", "HEAD"]) == before)
 }
+
+@Test func indexLockCreatedDuringCommitLeavesHeadAndIndexUnchanged() throws {
+  let repo = try Repository()
+  defer { repo.remove() }
+  try repo.write("selected", "included")
+  try repo.write("excluded", "staged")
+  _ = try Runner.git(repo.path, ["add", "excluded"])
+  let before = try Runner.git(repo.path, ["rev-parse", "HEAD"])
+  let index = try Data(contentsOf: URL(fileURLWithPath: repo.path + "/.git/index"))
+  let hook = repo.path + "/.git/hooks/pre-commit"
+  try "#!/bin/sh\n: > \"$(git rev-parse --absolute-git-dir)/index.lock\"\n".write(
+    toFile: hook, atomically: true, encoding: .utf8)
+  try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: hook)
+  #expect(throws: (any Error).self) {
+    try Commit.commitAndPush(
+      repo: repo.path, branch: "main", paths: ["selected"], message: "selected only")
+  }
+  #expect(try Runner.git(repo.path, ["rev-parse", "HEAD"]) == before)
+  #expect(try Data(contentsOf: URL(fileURLWithPath: repo.path + "/.git/index")) == index)
+}
+
+@Test func cancellationAfterRefUpdateStillInstallsPreparedIndex() throws {
+  let repo = try Repository()
+  defer { repo.remove() }
+  try repo.write("selected", "included")
+  let before = try Runner.git(repo.path, ["rev-parse", "HEAD"])
+  let marker = repo.path + "/.git/ref-advanced"
+  let hook = repo.path + "/.git/hooks/reference-transaction"
+  try "#!/bin/sh\nif [ \"$1\" = committed ]; then\n: > '\(marker)'\nsleep 30\nfi\n".write(
+    toFile: hook, atomically: true, encoding: .utf8)
+  try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: hook)
+  let cancel = Cancellation()
+  let worker = Thread {
+    let deadline = Date().addingTimeInterval(5)
+    while !FileManager.default.fileExists(atPath: marker) && Date() < deadline {
+      Thread.sleep(forTimeInterval: 0.01)
+    }
+    cancel.cancel()
+  }
+  worker.start()
+  do {
+    _ = try Commit.commitAndPush(
+      repo: repo.path, branch: "main", paths: ["selected"], message: "selected only", cancel: cancel
+    )
+    Issue.record("Expected cancellation after committing")
+  } catch {
+    #expect(String(describing: error).contains("Committed"))
+  }
+  #expect(try Runner.git(repo.path, ["rev-parse", "HEAD"]) != before)
+  #expect(try Runner.git(repo.path, ["diff", "--cached", "--name-only"]).isEmpty)
+  #expect(!FileManager.default.fileExists(atPath: repo.path + "/.git/index.lock"))
+}
