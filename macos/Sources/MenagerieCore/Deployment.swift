@@ -1,3 +1,4 @@
+import Darwin
 import Foundation
 
 public struct DeploymentStep: Sendable, Equatable {
@@ -12,8 +13,13 @@ public enum Deployment {
     hostname: String = ProcessInfo.processInfo.hostName.components(separatedBy: ".")[0]
   ) -> Bool {
     let host = machine.agent.flatMap(URL.init(string:))?.host?.lowercased()
+    var address = in_addr()
+    let ipv4Loopback =
+      host.map {
+        inet_pton(AF_INET, $0, &address) == 1 && UInt32(bigEndian: address.s_addr) >> 24 == 127
+      } ?? false
     return name.lowercased() == hostname.lowercased() || host == "localhost" || host == "[::1]"
-      || host == "::1" || host?.hasPrefix("127.") == true
+      || host == "::1" || ipv4Loopback
   }
   public static func pushScript(repo: String, branch: String) -> String {
     let ref = shellQuote("refs/heads/" + branch)

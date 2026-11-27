@@ -258,3 +258,13 @@ private func report(
   #expect(changes.first { $0.path == "new.txt" }?.lines?.added == 3)
   #expect(changes.first { $0.path == "empty.txt" }?.lines?.added == 0)
 }
+@Test(arguments: [
+  ("http://127.0.0.1:9184", true), ("http://127.12.34.56:9184", true),
+  ("http://localhost:9184", true), ("http://user@[::1]:9184/x", true),
+  ("http://127.example.com:9184", false), ("http://127.0.0.1.example.com", false),
+  ("http://10.0.0.1:9184", false),
+])
+func localDetectionRequiresAnActualLoopbackAddress(url: String, expected: Bool) throws {
+  let fleet = try Fleet.parse("version: 1\nmachines: { remote: { agent: '\(url)' } }")
+  #expect(Deployment.isLocal("remote", fleet.machines["remote"]!, hostname: "this-mac") == expected)
+}
