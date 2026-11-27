@@ -192,7 +192,10 @@ public enum Poller {
       _ = try? Runner.run(
         Command(
           "/usr/bin/git",
-          ["-C", repo, "fetch", "--quiet", "origin", "--end-of-options", fleet.branch], timeout: 30)
+          [
+            "-C", repo, "fetch", "--quiet", "--no-write-fetch-head", "origin", "--end-of-options",
+            fleet.branch,
+          ], timeout: 30)
       )
     }.value
   }
