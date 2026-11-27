@@ -207,6 +207,81 @@ public enum Commit {
         repo: root, branch: branch, paths: paths, message: message, cancel: cancel)
     }
   }
+  private static func createSelectedCommit(
+    repo: String, branch: String, paths: [String], message: String, cancel: Cancellation
+  ) throws {
+    func rejectDirectories() throws {
+      for path in paths {
+        let components = path.split(separator: "/", omittingEmptySubsequences: false)
+        guard !components.isEmpty,
+          components.allSatisfy({ !$0.isEmpty && $0 != "." && $0 != ".." })
+        else { throw FleetError("Invalid selected path") }
+        var info = stat()
+        if lstat(repo + "/" + path, &info) == 0, info.st_mode & S_IFMT == S_IFDIR {
+          throw FleetError("Selected file is now a directory: \(path). Reload changes first.")
+        }
+      }
+    }
+    try rejectDirectories()
+    let temporary = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    try FileManager.default.createDirectory(
+      at: temporary, withIntermediateDirectories: false, attributes: [.posixPermissions: 0o700])
+    defer { try? FileManager.default.removeItem(at: temporary) }
+    var environment = ProcessInfo.processInfo.environment
+    environment["GIT_INDEX_FILE"] = temporary.appendingPathComponent("index").path
+    environment["GIT_EDITOR"] = ":"
+    environment["GIT_LITERAL_PATHSPECS"] = "1"
+    environment["GIT_TERMINAL_PROMPT"] = "0"
+    environment["GIT_NO_LAZY_FETCH"] = "1"
+    func git(_ args: [String], input: Data = Data()) throws -> String {
+      var command = Command("/usr/bin/git", ["-C", repo] + args, input: input, timeout: 300)
+      command.environment = environment
+      return try Runner.run(command, cancel: cancel).checked()
+    }
+    let head = try git(["rev-parse", "HEAD"]).trimmingCharacters(in: .whitespacesAndNewlines)
+    _ = try git(["read-tree", head])
+    _ = try git(["add", "-A", "--"] + paths)
+    let messageFile = temporary.appendingPathComponent("message")
+    try Data((message + "\n").utf8).write(to: messageFile)
+    _ = try git(["hook", "run", "--ignore-missing", "pre-commit"])
+    _ = try git([
+      "hook", "run", "--ignore-missing", "prepare-commit-msg", "--", messageFile.path, "message",
+    ])
+    _ = try git(["hook", "run", "--ignore-missing", "commit-msg", "--", messageFile.path])
+    try rejectDirectories()
+    let tree = try git(["write-tree"]).trimmingCharacters(in: .whitespacesAndNewlines)
+    let changed = try git(["diff", "--name-only", "--no-renames", "-z", head, tree, "--"])
+      .split(separator: "\0").map(String.init)
+    guard Set(changed) == Set(paths) else {
+      throw FleetError("Selected files changed while preparing the commit. Reload changes first.")
+    }
+    var arguments = ["commit-tree", tree, "-p", head, "-F", messageFile.path]
+    if (try? git(["config", "--bool", "--get", "commit.gpgsign"]))?
+      .trimmingCharacters(in: .whitespacesAndNewlines) == "true"
+    {
+      arguments.append("-S")
+    }
+    let commit = try git(arguments).trimmingCharacters(in: .whitespacesAndNewlines)
+    try rejectDirectories()
+    _ = try git([
+      "update-ref", "-m", "commit: " + oneLine(message), "refs/heads/" + branch, commit, head,
+    ])
+    // Update exact index entries, preserving unrelated staged files and avoiding directory pathspecs.
+    let entries = try git(["ls-tree", "-r", "-z", commit, "--"] + paths)
+    var index = paths.map { "0 " + String(repeating: "0", count: head.count) + "\t" + $0 + "\0" }
+      .joined()
+    for entry in entries.split(separator: "\0") {
+      let fields = entry.split(separator: " ", maxSplits: 2)
+      guard fields.count == 3 else { continue }
+      index += String(fields[0]) + " " + String(fields[2]) + "\0"
+    }
+    _ = try Runner.run(
+      Command(
+        "/usr/bin/git", ["-C", repo, "update-index", "-z", "--index-info"], input: Data(index.utf8)),
+      cancel: cancel
+    ).checked()
+    _ = try? Runner.git(repo, ["hook", "run", "--ignore-missing", "post-commit"], cancel: cancel)
+  }
   private static func commitAndPushUnlocked(
     repo: String, branch: String, paths: [String], message: String, cancel: Cancellation
   ) throws -> String {
@@ -217,9 +292,8 @@ public enum Commit {
       try Runner.git(repo, ["symbolic-ref", "--quiet", "HEAD"], cancel: cancel).trimmingCharacters(
         in: .whitespacesAndNewlines) == "refs/heads/" + branch
     else { throw FleetError("Checkout is not on \(branch)") }
-    _ = try Runner.git(repo, ["add", "-A", "--"] + paths, cancel: cancel)
-    _ = try Runner.git(
-      repo, ["commit", "-q", "-m", message, "--only", "--"] + paths, cancel: cancel)
+    try createSelectedCommit(
+      repo: repo, branch: branch, paths: paths, message: message, cancel: cancel)
     let committed = try Runner.git(repo, ["rev-parse", "--short", "HEAD"])
     do {
       _ = try Runner.git(repo, ["fetch", "-q", "origin", "refs/heads/" + branch], cancel: cancel)

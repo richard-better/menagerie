@@ -32,3 +32,38 @@ import Testing
   #expect(try Runner.git(repo.path, ["show", "HEAD:sub/settings"]) == "sub base\n")
   #expect(try Runner.git(repo.path, ["diff", "--name-only"]).contains("sub/settings"))
 }
+
+@Test func selectedFileCannotExpandToDirectory() throws {
+  let repo = try Repository()
+  defer { repo.remove() }
+  try repo.write("settings", "selected")
+  let paths = try Commit.changes(repo: repo.path).map(\.path)
+  let before = try Runner.git(repo.path, ["rev-parse", "HEAD"])
+  try FileManager.default.removeItem(atPath: repo.path + "/settings")
+  try FileManager.default.createDirectory(
+    atPath: repo.path + "/settings", withIntermediateDirectories: false)
+  try repo.write("settings/secret.env", "excluded")
+  #expect(throws: (any Error).self) {
+    try Commit.commitAndPush(
+      repo: repo.path, branch: "main", paths: paths, message: "selected only")
+  }
+  #expect(try Runner.git(repo.path, ["rev-parse", "HEAD"]) == before)
+  #expect(try Runner.git(repo.path, ["diff", "--cached", "--name-only"]).isEmpty)
+}
+
+@Test func commitVerifiesHookTreeBeforeUpdatingHead() throws {
+  let repo = try Repository()
+  defer { repo.remove() }
+  try repo.write("selected", "included")
+  try repo.write("excluded", "secret")
+  let hook = repo.path + "/.git/hooks/pre-commit"
+  try "#!/bin/sh\ngit add -- excluded\n".write(toFile: hook, atomically: true, encoding: .utf8)
+  try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: hook)
+  let before = try Runner.git(repo.path, ["rev-parse", "HEAD"])
+  #expect(throws: (any Error).self) {
+    try Commit.commitAndPush(
+      repo: repo.path, branch: "main", paths: ["selected"], message: "selected only")
+  }
+  #expect(try Runner.git(repo.path, ["rev-parse", "HEAD"]) == before)
+  #expect(try Runner.git(repo.path, ["diff", "--cached", "--name-only"]).isEmpty)
+}
