@@ -76,8 +76,12 @@ import Observation
       if !commitNote.isEmpty { commitNote = "" }
     }
   }
+  var canOpenTerminal: Bool {
+    guard let machine = fleet?.machines[selected] else { return false }
+    return TerminalSession.command(machine: machine, name: selected) != nil
+  }
   func openTerminal() {
-    guard let machine = fleet?.machines[selected] else { return }
+    guard canOpenTerminal, let machine = fleet?.machines[selected] else { return }
     if terminals[selected] == nil || terminals[selected]?.transport.finished == true {
       terminals[selected] = TerminalSession(
         machine: machine, name: selected)

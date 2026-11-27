@@ -230,7 +230,7 @@ struct FleetView: View {
       GlassEffectContainer {
         HStack {
           Button("Changes") { model.page = "changes" }
-          Button("Terminal", action: model.openTerminal)
+          Button("Terminal", action: model.openTerminal).disabled(!model.canOpenTerminal)
           Button("Log") { model.page = "log" }
           Spacer()
           Button("Sync", systemImage: "arrow.trianglehead.2.clockwise") {

@@ -60,3 +60,18 @@ func localTerminalFallsBackWhenCheckoutIsNotADirectory(isFile: Bool) throws {
     TerminalSession.command(machine: fleet.machines["test"]!, name: "test")?.directory
       == NSHomeDirectory())
 }
+
+@MainActor @Test func terminalRequiresALocalOrSSHDestination() throws {
+  let model = Model()
+  model.fleet = try Fleet.parse(
+    "version: 1\nmachines: {none: {}, remote: {ssh: 'test@invalid.invalid'}, local: {agent: 'http://localhost:9184'}}"
+  )
+  model.selected = "remote"
+  #expect(model.canOpenTerminal)
+  model.selected = "local"
+  #expect(model.canOpenTerminal)
+  model.selected = "none"
+  #expect(!model.canOpenTerminal)
+  model.openTerminal()
+  #expect(model.terminals.isEmpty && model.page == "details")
+}
