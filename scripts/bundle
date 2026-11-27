@@ -47,6 +47,7 @@ cp target/ghostty/bin/MenageriePTYHost "$app/Contents/MacOS/MenageriePTYHost"
 cp assets/brand/menubar.png "$app/Contents/Resources/menubar.png"
 cp examples/fleet.yaml "$app/Contents/Resources/fleet-example.yaml"
 cp assets/brand/Menagerie.icns "$app/Contents/Resources/Menagerie.icns"
+cp -R assets/services "$app/Contents/Resources/services"
 cat >"$app/Contents/Info.plist" <<EOF
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">

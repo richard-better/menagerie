@@ -10,6 +10,7 @@ extension Color {
 }
 enum Palette {
   static let background = Color(hex: 0x151c19), panel = Color(hex: 0x1b231f),
+    raised = Color(hex: 0x232d28),
     ink = Color(hex: 0xf0eee8), muted = Color(hex: 0x939e97), accent = Color(hex: 0xc5dcc0),
     amber = Color(hex: 0xd9a657), green = Color(hex: 0x7ccb93)
 }
@@ -62,9 +63,11 @@ struct FleetPopover: View {
             } else {
               Text(model.status(name).label).font(.caption).foregroundStyle(Palette.muted)
             }
-            ForEach(Array(machine.services.enumerated()), id: \.offset) { _, service in
-              if let url = URL(string: service.url) {
-                Link(destination: url) { ServiceIcon(service: service) }.help(service.name)
+            HStack(spacing: 4) {
+              ForEach(Array(machine.services.enumerated()), id: \.offset) { _, service in
+                if let url = URL(string: service.url) {
+                  Link(destination: url) { ServiceIcon(service: service) }.help(service.name)
+                }
               }
             }
           }.padding(14)
@@ -421,20 +424,25 @@ struct LoadChart: View {
 
 struct ServiceIcon: View {
   let service: Service
-  var color: Color {
-    switch service.icon {
-    case "jellyfin": Color(hex: 0x7f5bc8)
-    case "jellyseerr": Color(hex: 0x5b4bdb)
-    case "home-assistant": Color(hex: 0x18bcf2)
-    case "plex": Color(hex: 0xd9a20b)
-    case "grafana": Color(hex: 0xe8622c)
-    default: Palette.muted
-    }
-  }
+  private static let glyphs: [String: NSImage] = {
+    let urls = Bundle.main.urls(forResourcesWithExtension: "svg", subdirectory: "services") ?? []
+    return Dictionary(
+      uniqueKeysWithValues: urls.compactMap { url in
+        guard let image = NSImage(contentsOf: url) else { return nil }
+        image.isTemplate = true
+        return (url.deletingPathExtension().lastPathComponent, image)
+      })
+  }()
   var body: some View {
-    Text(service.icon == "jellyseerr" ? "S" : String(service.name.prefix(1)).uppercased())
-      .font(.system(size: 12, weight: .bold)).foregroundStyle(.white)
-      .frame(width: 24, height: 24).background(color, in: RoundedRectangle(cornerRadius: 6))
+    Group {
+      if let name = service.icon, let glyph = Self.glyphs[name] {
+        Image(nsImage: glyph).renderingMode(.template).resizable().scaledToFit()
+          .frame(width: 13.2, height: 13.2)
+      } else {
+        Text(String(service.name.prefix(1)).uppercased()).font(.system(size: 14, weight: .bold))
+      }
+    }.foregroundStyle(Palette.ink).frame(width: 24, height: 24)
+      .background(Palette.raised, in: RoundedRectangle(cornerRadius: 6))
       .accessibilityLabel(service.name)
   }
 }
