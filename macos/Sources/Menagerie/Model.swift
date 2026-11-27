@@ -22,6 +22,17 @@ import Observation
   var committing = false
   var drafting = false
   var terminals: [String: TerminalSession] = [:]
+  func closeWindow() {
+    for terminal in terminals.values { terminal.transport.stop() }
+    terminals.removeAll()
+    page = "details"
+    if !committing && !drafting {
+      files = []
+      included = []
+      message = ""
+      commitNote = ""
+    }
+  }
   func openTerminal() {
     guard let machine = fleet?.machines[selected] else { return }
     if terminals[selected] == nil {

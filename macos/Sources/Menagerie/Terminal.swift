@@ -4,11 +4,16 @@ import MenagerieCore
 import SwiftUI
 
 @MainActor final class TerminalSession {
-  let view: TerminalGridView
+  private weak var cachedView: TerminalGridView?
+  var view: TerminalGridView {
+    if let cachedView { return cachedView }
+    let view = TerminalGridView()
+    view.transport = transport
+    cachedView = view
+    return view
+  }
   let transport = PTYSession()
   init(machine: Machine, name: String, directory: String?) {
-    view = TerminalGridView()
-    view.transport = transport
     if Deployment.isLocal(name, machine) {
       transport.start(
         Command(
