@@ -68,20 +68,13 @@ public enum Deployment {
     }
     let local = isLocal(name, machine)
     guard local || machine.ssh != nil else { throw FleetError("\(name) has no SSH destination") }
-    let checkouts = [fleet.repoPath, local ? expandHome(sync.repo ?? ".") : nil].compactMap { $0 }
-    func prepared(_ steps: [DeploymentStep]) -> [DeploymentStep] {
-      steps.map {
-        var step = $0
-        step.checkouts = checkouts
-        return step
-      }
-    }
     var steps: [DeploymentStep] = []
     if action == .sync, let repo = fleet.repoPath {
       steps.append(
         DeploymentStep(
           label: "Push checkout commits (uncommitted changes stay behind)",
-          command: Command("/usr/bin/true"), pushRepo: repo, pushBranch: fleet.branch))
+          command: Command("/usr/bin/true"), checkouts: [repo], pushRepo: repo,
+          pushBranch: fleet.branch))
     }
     let repo = sync.repo ?? "."
     let attr = sync.flake ?? (sync.preset == .homeManager ? machine.ssh ?? name : name)
@@ -105,7 +98,8 @@ public enum Deployment {
           DeploymentStep(
             label: "Pull this Mac's checkout",
             command: Command(
-              "/bin/sh", ["-c", "cd \(shellQuote(dir)) || exit 1\n" + pull], timeout: 300)))
+              "/bin/sh", ["-c", "cd \(shellQuote(dir)) || exit 1\n" + pull], timeout: 300),
+            checkouts: [dir]))
         arguments = [
           "switch", "--flake", flakeURL(path: dir, branch: fleet.branch, attribute: attr),
         ]
@@ -115,8 +109,8 @@ public enum Deployment {
       steps.append(
         DeploymentStep(
           label: "Switch this Mac", command: Command(program, arguments, timeout: 3600),
-          administrator: true))
-      return prepared(steps)
+          administrator: true, checkouts: action == .sync ? [dir] : []))
+      return steps
     }
     var fragment = URLComponents()
     fragment.fragment = attr
@@ -147,7 +141,8 @@ public enum Deployment {
         ], timeout: 3600)
     steps.append(
       DeploymentStep(
-        label: action == .sync ? "Pull and switch \(name)" : "Roll back \(name)", command: command))
-    return prepared(steps)
+        label: action == .sync ? "Pull and switch \(name)" : "Roll back \(name)", command: command,
+        checkouts: action == .sync && local ? [expandHome(repo)] : []))
+    return steps
   }
 }
