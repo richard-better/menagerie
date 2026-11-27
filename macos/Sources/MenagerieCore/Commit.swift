@@ -4,21 +4,44 @@ import Foundation
 public struct Change: Sendable, Equatable, Identifiable {
   public var path: String
   public var kind: String
+  public var lines: LineCounts? = nil
   public var id: String { path }
+  public struct LineCounts: Sendable, Equatable {
+    public var added: Int
+    public var removed: Int
+  }
 }
 public enum Commit {
   public static func changes(repo: String) throws -> [Change] {
-    try Runner.git(
+    let numstat = try Runner.git(repo, ["diff", "HEAD", "--numstat", "--no-renames", "-z"])
+    var counts: [String: Change.LineCounts] = [:]
+    for entry in numstat.split(separator: "\0") {
+      let fields = entry.split(separator: "\t", maxSplits: 2, omittingEmptySubsequences: false)
+      if fields.count == 3, let added = Int(fields[0]), let removed = Int(fields[1]) {
+        counts[String(fields[2])] = Change.LineCounts(added: added, removed: removed)
+      }
+    }
+    return try Runner.git(
       repo,
       ["-c", "status.renames=false", "status", "--porcelain=v1", "-z", "--untracked-files=all"]
     )
     .split(separator: "\0").compactMap { entry in
       guard entry.utf8.count > 3 else { return nil }
       let code = String(entry.prefix(2))
+      let path = String(entry.dropFirst(3))
+      var lines = counts[path]
+      if code == "??", let body = smallText(repo: repo, path: path) {
+        lines = Change.LineCounts(
+          added: body.isEmpty
+            ? 0
+            : body.split(separator: "\n", omittingEmptySubsequences: false).count
+              - (body.hasSuffix("\n") ? 1 : 0), removed: 0)
+      }
       return Change(
-        path: String(entry.dropFirst(3)),
+        path: path,
         kind: code == "??" || code.contains("A")
-          ? "new" : code.contains("D") ? "deleted" : code.contains("U") ? "conflicted" : "modified")
+          ? "new" : code.contains("D") ? "deleted" : code.contains("U") ? "conflicted" : "modified",
+        lines: lines)
     }
   }
   public static func template(_ changes: [Change]) -> String {

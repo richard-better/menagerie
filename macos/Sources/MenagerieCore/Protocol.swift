@@ -11,7 +11,8 @@ public struct Probe<Value: Decodable & Sendable>: Decodable, Sendable {
   public var error: String?
   public func isFresh(now: Int64) -> Bool {
     guard error == nil, let at else { return false }
-    return now - at <= max(Int64(everyS) * 3, 35) * 1000
+    let age = now.subtractingReportingOverflow(at)
+    return !age.overflow && age.partialValue <= max(Int64(everyS) * 3, 35) * 1000
   }
 }
 public struct Load: Decodable, Sendable {
@@ -24,7 +25,9 @@ public struct Usage: Decodable, Sendable {
     case totalBytes = "total_bytes"
   }
   public var usedBytes, totalBytes: UInt64
-  public var fraction: Double { totalBytes == 0 ? 0 : Double(usedBytes) / Double(totalBytes) }
+  public var fraction: Double {
+    totalBytes == 0 ? 0 : min(1, Double(usedBytes) / Double(totalBytes))
+  }
 }
 public struct Battery: Decodable, Sendable {
   enum CodingKeys: String, CodingKey {
@@ -93,6 +96,16 @@ public struct AgentStatus: Decodable, Sendable {
     probes = try c.decode(Probes.self, forKey: .probes)
     loadHistory = try c.decodeIfPresent([Sample].self, forKey: .loadHistory) ?? []
     guard version == 1 else { throw FleetError("Unsupported agent protocol \(version)") }
+    let loads =
+      [probes.load.value?.one, probes.load.value?.five, probes.load.value?.fifteen].compactMap {
+        $0
+      } + loadHistory.map(\.value)
+    guard loads.allSatisfy({ $0.isFinite && (0...1e9).contains($0) }),
+      loadHistory.count <= 1440,
+      probes.battery.value.map({ (0...100).contains($0.percent) }) ?? true,
+      probes.temperature.value.map({ (-273.15...1000).contains($0.celsius) }) ?? true
+    else { throw FleetError("Agent reported measurements outside their valid range") }
+
     if let revision = probes.revision.value, !Revision.isValid(revision.rev) {
       throw FleetError("Agent revision is not a commit hash")
     }

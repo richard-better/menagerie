@@ -181,7 +181,10 @@ struct Repository {
   for byte in text.utf8 { output += filter.filter([byte][...]) }
   #expect(String(decoding: output, as: UTF8.self) == text)
 }
-private func report(version: Int = 1, revision: String = "abcdef1234", probeError: String? = nil)
+private func report(
+  version: Int = 1, revision: String = "abcdef1234", probeError: String? = nil,
+  temperature: Double? = nil
+)
   throws -> AgentStatus
 {
   let empty: [String: Any] = ["value": NSNull(), "at": NSNull(), "every_s": 10, "error": NSNull()]
@@ -193,6 +196,11 @@ private func report(version: Int = 1, revision: String = "abcdef1234", probeErro
     "value": ["rev": revision, "dirty": false, "source": "nix-darwin"], "at": 1000, "every_s": 10,
     "error": probeError as Any? ?? NSNull(),
   ]
+  if let temperature {
+    probes["temperature"] = [
+      "value": ["celsius": temperature], "at": 1000, "every_s": 10, "error": NSNull(),
+    ]
+  }
   let json: [String: Any] = [
     "version": version, "host": "local", "agent": ["version": "1", "now": 1000], "probes": probes,
   ]
@@ -231,4 +239,22 @@ private func report(version: Int = 1, revision: String = "abcdef1234", probeErro
     try Commit.draft(
       command: "echo warning >&2; printf '\"fix: correct message\"\\nignored'", repo: repo.path,
       input: "diff") == "fix: correct message")
+}
+
+@Test func extremeProbeTimestampsDoNotOverflow() throws {
+  let probe = try JSONDecoder().decode(
+    Probe<Load>.self,
+    from: Data(#"{"value":null,"at":-9223372036854775808,"every_s":4294967295,"error":null}"#.utf8))
+  #expect(!probe.isFresh(now: Int64.max))
+  #expect(throws: (any Error).self) { try report(temperature: 1e100) }
+  #expect(throws: (any Error).self) { try report(temperature: -300) }
+}
+@Test func untrackedLineCountsIncludeBlankLines() throws {
+  let repo = try Repository()
+  defer { repo.remove() }
+  try repo.write("new.txt", "one\n\nthree\n")
+  try repo.write("empty.txt", "")
+  let changes = try Commit.changes(repo: repo.path)
+  #expect(changes.first { $0.path == "new.txt" }?.lines?.added == 3)
+  #expect(changes.first { $0.path == "empty.txt" }?.lines?.added == 0)
 }

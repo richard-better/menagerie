@@ -228,11 +228,8 @@ struct FleetView: View {
             Text("1h").tag(1)
             Text("24h").tag(24)
           }.pickerStyle(.segmented).frame(width: 120)
-          LoadChart(
-            samples: report.loadHistory.filter {
-              $0.at >= report.agent.now - Int64(hours) * 3_600_000
-            }.map(\.value)
-          ).frame(height: 72)
+          LoadChart(samples: report.loadHistory, now: report.agent.now, hours: hours).frame(
+            height: 72)
         }
         Grid(horizontalSpacing: 32, verticalSpacing: 20) {
           GridRow {
@@ -338,6 +335,10 @@ struct CommitPage: View {
             Text(change.path).textSelection(.enabled)
             Spacer()
             Text(change.kind).foregroundStyle(Palette.muted)
+            if let lines = change.lines {
+              Text("+\(lines.added) -\(lines.removed)").font(.caption.monospacedDigit())
+                .foregroundStyle(Palette.muted)
+            }
           }
         }.toggleStyle(.checkbox)
       }.scrollContentBackground(.hidden).disabled(model.committing)
@@ -396,15 +397,23 @@ struct UsageMeter: View {
   }
 }
 struct LoadChart: View {
-  var samples: [Double]
+  var samples: [AgentStatus.Sample]
+  var now: Int64
+  var hours: Int
   var body: some View {
     Canvas { context, size in
-      let maxValue = max(1, samples.max() ?? 1)
+      let interval = Int64(hours) * 3_600_000
       let columns = max(1, Int(size.width / 6))
-      for column in 0..<columns {
-        guard !samples.isEmpty else { continue }
-        let sample = samples[min(samples.count - 1, column * samples.count / columns)]
-        let rows = max(0, min(12, Int(sample / maxValue * 12)))
+      var values: [Int: Double] = [:]
+      for sample in samples {
+        let age = now.subtractingReportingOverflow(sample.at)
+        guard !age.overflow, (0...interval).contains(age.partialValue) else { continue }
+        let column = Int((1 - Double(age.partialValue) / Double(interval)) * Double(columns - 1))
+        values[column] = max(values[column] ?? 0, sample.value)
+      }
+      let scale = max(1, (values.values.max() ?? 0) * 1.15)
+      for (column, sample) in values {
+        let rows = max(0, min(12, Int(sample / scale * 12)))
         for row in 0..<rows {
           context.fill(
             Path(
