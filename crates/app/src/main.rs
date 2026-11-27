@@ -128,6 +128,11 @@ fn main() {
                 };
                 match press {
                     tray::Press::Up => tray.set_active(panel.is_visible(mtm)),
+                    tray::Press::Right => {
+                        panel.hide(mtm);
+                        tray.set_active(false);
+                        tray.show_quit_menu();
+                    }
                     tray::Press::Down => {
                         let rect = tray.icon_rect();
                         icon_rect.set(rect);

@@ -19,6 +19,8 @@ const GLYPH: &str = "◆";
 pub enum Press {
     Down,
     Up,
+    /// A right click: show the Quit menu.
+    Right,
 }
 
 /// A live status item. Dropping it removes the icon, so hold it for the
@@ -31,16 +33,30 @@ impl Tray {
     pub fn new() -> anyhow::Result<(Self, UnboundedReceiver<Press>)> {
         let (tx, rx) = unbounded();
         set_click_handler(tx);
-        // Right click: the one thing that must always be reachable.
-        let menu = Menu::new();
-        menu.append(&PredefinedMenuItem::quit(Some("Quit Menagerie")))?;
+        // No menu is attached up front: AppKit pops an attached menu on any
+        // click, before tray-icon can tell left from right, so a left click
+        // would show Quit instead of the popover. See `show_quit_menu`.
         let icon = TrayIconBuilder::new()
             .with_title(GLYPH)
             .with_tooltip("Menagerie")
-            .with_menu(Box::new(menu))
-            .with_menu_on_left_click(false)
             .build()?;
         Ok((Self { icon }, rx))
+    }
+
+    /// The right-click menu: Quit, the one thing that must always be
+    /// reachable. Attached only while it shows, for the reason in `new`.
+    pub fn show_quit_menu(&self) {
+        let menu = Menu::new();
+        if menu
+            .append(&PredefinedMenuItem::quit(Some("Quit Menagerie")))
+            .is_err()
+        {
+            return;
+        }
+        self.icon.set_menu(Some(Box::new(menu)));
+        // Shows the menu and returns once it closes.
+        self.icon.show_menu();
+        self.icon.set_menu(None);
     }
 
     /// `◆` alone, or `◆ 2` when two machines need attention.
@@ -82,16 +98,18 @@ impl Tray {
 fn set_click_handler(tx: UnboundedSender<Press>) {
     TrayIconEvent::set_event_handler(Some(move |event: TrayIconEvent| {
         let TrayIconEvent::Click {
-            button: tray_icon::MouseButton::Left,
+            button,
             button_state,
             ..
         } = event
         else {
             return;
         };
-        let press = match button_state {
-            tray_icon::MouseButtonState::Down => Press::Down,
-            tray_icon::MouseButtonState::Up => Press::Up,
+        let press = match (button, button_state) {
+            (tray_icon::MouseButton::Left, tray_icon::MouseButtonState::Down) => Press::Down,
+            (tray_icon::MouseButton::Left, tray_icon::MouseButtonState::Up) => Press::Up,
+            (tray_icon::MouseButton::Right, tray_icon::MouseButtonState::Up) => Press::Right,
+            _ => return,
         };
         let _ = tx.unbounded_send(press);
     }));
