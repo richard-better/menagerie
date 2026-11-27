@@ -307,3 +307,20 @@ func localDetectionRequiresAnActualLoopbackAddress(url: String, expected: Bool) 
   #expect(!FileManager.default.fileExists(atPath: repo.path + "/.git/rebase-merge"))
   #expect(!FileManager.default.fileExists(atPath: repo.path + "/.git/rebase-apply"))
 }
+
+@Test func telemetryExpiresAtTheOfflineBoundary() throws {
+  let now = Date()
+  let observation = LiveReport(report: try report(temperature: 72), received: now)
+  let machine = try Fleet.parse("version: 1\nmachines: {test: {agent: 'http://localhost:9184'}}")
+    .machines["test"]!
+  #expect(
+    observation.freshReport(now: now.addingTimeInterval(34.999))?.probes.temperature.value?.celsius
+      == 72)
+  #expect(
+    observation.status(machine: machine, drift: [:], now: now.addingTimeInterval(34.999)) == .online
+  )
+  #expect(observation.freshReport(now: now.addingTimeInterval(35)) == nil)
+  #expect(
+    observation.status(machine: machine, drift: [:], now: now.addingTimeInterval(35)) == .offline)
+  #expect(LiveReport(report: try report()).freshReport(now: now) == nil)
+}

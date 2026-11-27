@@ -9,10 +9,14 @@ public struct LiveReport: Sendable {
     self.received = received
     self.error = error
   }
+  public func freshReport(now: Date = Date()) -> AgentStatus? {
+    guard let received, now.timeIntervalSince(received) < 35 else { return nil }
+    return report
+  }
   public func status(machine: Machine, drift: [String: Counts], now: Date = Date()) -> MachineStatus
   {
     guard machine.agent != nil else { return .noAgent }
-    guard let report, let received, now.timeIntervalSince(received) < 35 else { return .offline }
+    guard let report = freshReport(now: now) else { return .offline }
     guard report.probes.revision.isFresh(now: report.agent.now),
       let revision = report.probes.revision.value, let counts = drift[revision.rev]
     else { return .online }

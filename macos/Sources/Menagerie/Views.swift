@@ -251,7 +251,7 @@ struct FleetView: View {
         Text(note).font(.callout).foregroundStyle(Palette.amber).textSelection(.enabled)
           .fixedSize(horizontal: false, vertical: true)
       }
-      if let report = model.observations[model.selected]?.report {
+      if let report = model.observations[model.selected]?.freshReport() {
         VStack(alignment: .leading) {
           HStack {
             Text("Load").fontWeight(.medium)
