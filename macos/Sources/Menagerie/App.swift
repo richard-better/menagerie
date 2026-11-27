@@ -22,6 +22,7 @@ import SwiftUI
   private let popover = NSPopover()
   private var terminating = false
   private var benchmarkSource: DispatchSourceSignal?
+  private var benchmarkAnchor: NSWindow?
   func applicationDidFinishLaunching(_ notification: Notification) {
     NSApp.setActivationPolicy(.accessory)
     NSApp.appearance = NSAppearance(named: .darkAqua)
@@ -55,10 +56,27 @@ import SwiftUI
             let command = try? String(contentsOfFile: path + ".command", encoding: .utf8)
           else { return }
           if command == "open" {
-            if let self, let button = self.item.button {
-              self.popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
+            if let self {
+              NSApp.activate()
+              if self.benchmarkAnchor == nil {
+                let anchor = NSWindow(
+                  contentRect: NSRect(x: 20, y: 20, width: 1, height: 1), styleMask: .borderless,
+                  backing: .buffered, defer: false)
+                anchor.isOpaque = false
+                anchor.backgroundColor = .clear
+                anchor.isReleasedWhenClosed = false
+                anchor.orderFront(nil)
+                self.benchmarkAnchor = anchor
+              }
+
+              if let view = self.benchmarkAnchor?.contentView {
+                self.popover.behavior = .applicationDefined
+                self.popover.show(relativeTo: view.bounds, of: view, preferredEdge: .maxY)
+                WindowTiming.shared.record("popover-shown \(self.popover.isShown)")
+                precondition(self.popover.isShown, "Benchmark requires a visible popover")
+              }
             }
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
               NotificationCenter.default.post(name: .init("MenagerieBenchmarkOpen"), object: nil)
             }
           } else if command == "close" {
