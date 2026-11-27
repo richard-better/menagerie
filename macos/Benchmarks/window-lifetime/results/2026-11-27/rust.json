@@ -1,0 +1,37 @@
+[
+  {
+    "replicate": 0,
+    "pid": 52172,
+    "cold_ms": 35.286083000000005,
+    "warm_ms": 31.129125000000002,
+    "closed_seconds": 30.605022500036284
+  },
+  {
+    "replicate": 1,
+    "pid": 55535,
+    "cold_ms": 34.647,
+    "warm_ms": 39.603208,
+    "closed_seconds": 30.598707458004355
+  },
+  {
+    "replicate": 2,
+    "pid": 56111,
+    "cold_ms": 49.471250000000005,
+    "warm_ms": 35.265499999999996,
+    "closed_seconds": 30.594909999985248
+  },
+  {
+    "replicate": 3,
+    "pid": 56698,
+    "cold_ms": 44.051667,
+    "warm_ms": 17.478333,
+    "closed_seconds": 30.601433500181884
+  },
+  {
+    "replicate": 4,
+    "pid": 57272,
+    "cold_ms": 32.591,
+    "warm_ms": 24.2215,
+    "closed_seconds": 30.59499645908363
+  }
+]

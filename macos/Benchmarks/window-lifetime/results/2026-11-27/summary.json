@@ -1,0 +1,347 @@
+{
+  "rust": {
+    "samples": [
+      {
+        "replicate": 0,
+        "pid": 52172,
+        "cold_ms": 35.286083000000005,
+        "warm_ms": 31.129125000000002,
+        "closed_seconds": 30.605022500036284
+      },
+      {
+        "replicate": 1,
+        "pid": 55535,
+        "cold_ms": 34.647,
+        "warm_ms": 39.603208,
+        "closed_seconds": 30.598707458004355
+      },
+      {
+        "replicate": 2,
+        "pid": 56111,
+        "cold_ms": 49.471250000000005,
+        "warm_ms": 35.265499999999996,
+        "closed_seconds": 30.594909999985248
+      },
+      {
+        "replicate": 3,
+        "pid": 56698,
+        "cold_ms": 44.051667,
+        "warm_ms": 17.478333,
+        "closed_seconds": 30.601433500181884
+      },
+      {
+        "replicate": 4,
+        "pid": 57272,
+        "cold_ms": 32.591,
+        "warm_ms": 24.2215,
+        "closed_seconds": 30.59499645908363
+      }
+    ],
+    "memory": {
+      "never-opened": {
+        "phase": "rust-never-opened",
+        "pid": 52172,
+        "timestamp": "2026-11-27T13:41:44.327324+00:00",
+        "footprint_MB": 24.0,
+        "cpu_samples": [
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.5,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "cpu_mean": 0.045454545454545456,
+        "cpu_median": 0.0,
+        "cpu_max": 0.5
+      },
+      "open": {
+        "phase": "rust-open",
+        "pid": 52172,
+        "timestamp": "2026-11-27T13:42:27.923839+00:00",
+        "footprint_MB": 75.0,
+        "cpu_samples": [
+          0.0,
+          20.1,
+          19.8,
+          13.7,
+          0.0,
+          0.6,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "cpu_mean": 4.927272727272728,
+        "cpu_median": 0.0,
+        "cpu_max": 20.1
+      },
+      "after-close": {
+        "phase": "rust-after-close",
+        "pid": 52172,
+        "timestamp": "2026-11-27T13:43:10.913385+00:00",
+        "footprint_MB": 34.0,
+        "cpu_samples": [
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.5,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "cpu_mean": 0.045454545454545456,
+        "cpu_median": 0.0,
+        "cpu_max": 0.5
+      }
+    },
+    "cold_ms": {
+      "median": 35.286083000000005,
+      "max": 49.471250000000005
+    },
+    "warm_ms": {
+      "median": 31.129125000000002,
+      "max": 39.603208
+    }
+  },
+  "kept": {
+    "samples": [
+      {
+        "replicate": 0,
+        "pid": 35742,
+        "cold_ms": 117.8615833632648,
+        "warm_ms": 68.3723334223032,
+        "closed_seconds": 30.59813275001943
+      },
+      {
+        "replicate": 1,
+        "pid": 38793,
+        "cold_ms": 120.72191666811705,
+        "warm_ms": 65.32258330844343,
+        "closed_seconds": 30.591415083035827
+      },
+      {
+        "replicate": 2,
+        "pid": 39594,
+        "cold_ms": 113.73262503184378,
+        "warm_ms": 63.36258351802826,
+        "closed_seconds": 30.595957790967077
+      },
+      {
+        "replicate": 3,
+        "pid": 40432,
+        "cold_ms": 115.86662498302758,
+        "warm_ms": 74.00366687215865,
+        "closed_seconds": 30.591912125004455
+      },
+      {
+        "replicate": 4,
+        "pid": 41364,
+        "cold_ms": 113.81908319890499,
+        "warm_ms": 75.69874986074865,
+        "closed_seconds": 30.5953052919358
+      }
+    ],
+    "memory": {
+      "never-opened": {
+        "phase": "kept-never-opened",
+        "pid": 35742,
+        "timestamp": "2026-11-27T13:28:10.448637+00:00",
+        "footprint_MB": 20.0,
+        "cpu_samples": [
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.6,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "cpu_mean": 0.05454545454545454,
+        "cpu_median": 0.0,
+        "cpu_max": 0.6
+      },
+      "open": {
+        "phase": "kept-open",
+        "pid": 35742,
+        "timestamp": "2026-11-27T13:28:54.029535+00:00",
+        "footprint_MB": 105.0,
+        "cpu_samples": [
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          1.4,
+          0.1,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "cpu_mean": 0.13636363636363635,
+        "cpu_median": 0.0,
+        "cpu_max": 1.4
+      },
+      "after-close": {
+        "phase": "kept-after-close",
+        "pid": 35742,
+        "timestamp": "2026-11-27T13:29:36.952207+00:00",
+        "footprint_MB": 106.0,
+        "cpu_samples": [
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.8,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "cpu_mean": 0.07272727272727274,
+        "cpu_median": 0.0,
+        "cpu_max": 0.8
+      }
+    },
+    "cold_ms": {
+      "median": 115.86662498302758,
+      "max": 120.72191666811705
+    },
+    "warm_ms": {
+      "median": 68.3723334223032,
+      "max": 75.69874986074865
+    }
+  },
+  "released": {
+    "samples": [
+      {
+        "replicate": 0,
+        "pid": 58926,
+        "cold_ms": 113.59525006264448,
+        "warm_ms": 72.11679150350392,
+        "closed_seconds": 30.597690124996006
+      },
+      {
+        "replicate": 1,
+        "pid": 61685,
+        "cold_ms": 133.6887499783188,
+        "warm_ms": 66.20724988169968,
+        "closed_seconds": 30.63822204200551
+      },
+      {
+        "replicate": 2,
+        "pid": 62192,
+        "cold_ms": 118.67700004950166,
+        "warm_ms": 65.20741665735841,
+        "closed_seconds": 30.59971483401023
+      },
+      {
+        "replicate": 3,
+        "pid": 62704,
+        "cold_ms": 111.58520844765007,
+        "warm_ms": 66.98116660118103,
+        "closed_seconds": 30.59397895913571
+      },
+      {
+        "replicate": 4,
+        "pid": 63198,
+        "cold_ms": 121.79145822301507,
+        "warm_ms": 82.63950003311038,
+        "closed_seconds": 30.653218500083312
+      }
+    ],
+    "memory": {
+      "never-opened": {
+        "phase": "released-never-opened",
+        "pid": 58926,
+        "timestamp": "2026-11-27T13:47:20.275801+00:00",
+        "footprint_MB": 20.0,
+        "cpu_samples": [
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          1.2,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "cpu_mean": 0.10909090909090909,
+        "cpu_median": 0.0,
+        "cpu_max": 1.2
+      },
+      "open": {
+        "phase": "released-open",
+        "pid": 58926,
+        "timestamp": "2026-11-27T13:48:03.982020+00:00",
+        "footprint_MB": 99.0,
+        "cpu_samples": [
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          1.5,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "cpu_mean": 0.13636363636363635,
+        "cpu_median": 0.0,
+        "cpu_max": 1.5
+      },
+      "after-close": {
+        "phase": "released-after-close",
+        "pid": 58926,
+        "timestamp": "2026-11-27T13:48:47.058703+00:00",
+        "footprint_MB": 41.0,
+        "cpu_samples": [
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          1.4,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "cpu_mean": 0.12727272727272726,
+        "cpu_median": 0.0,
+        "cpu_max": 1.4
+      }
+    },
+    "cold_ms": {
+      "median": 118.67700004950166,
+      "max": 133.6887499783188
+    },
+    "warm_ms": {
+      "median": 66.98116660118103,
+      "max": 82.63950003311038
+    }
+  }
+}

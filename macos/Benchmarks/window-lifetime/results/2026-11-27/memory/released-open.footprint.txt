@@ -1,0 +1,51 @@
+======================================================================
+Menagerie [58926]: 64-bit    Footprint: 99 MB (16384 bytes per page)
+======================================================================
+
+  Dirty      Clean  Reclaimable    Regions    Category
+    ---        ---          ---        ---    ---
+  57 MB        0 B        48 KB         44    CoreAnimation
+  26 MB        0 B       576 KB         64    Malloc Small
+3202 KB        0 B          0 B       1015    __DATA
+2624 KB        0 B          0 B         30    Untagged
+2335 KB        0 B          0 B       1001    __DATA_DIRTY
+1584 KB        0 B          0 B         13    Malloc Metadata
+ 961 KB        0 B          0 B        536    __AUTH
+ 960 KB        0 B          0 B          3    IOSurface
+ 816 KB        0 B          0 B         11    Owned physical footprint (unmapped) (graphics)
+ 785 KB        0 B          0 B          1    page table
+ 736 KB        0 B          0 B         28    IOAccelerator (graphics)
+ 496 KB        0 B          0 B          4    CoreUI Image Data
+ 432 KB        0 B        16 KB          1    Dispatch Continuations
+ 304 KB        0 B        80 KB         14    Stack
+ 272 KB        0 B          0 B          1    Malloc Tiny
+ 256 KB        0 B          0 B          5    CG Image
+ 186 KB        0 B          0 B       2714    unused dyld shared cache area
+ 128 KB        0 B          0 B          1    Accelerate Framework
+ 128 KB        0 B          0 B          4    __TPRO_CONST
+  64 KB        0 B          0 B          2    IOAccelerator
+  64 KB        0 B          0 B          4    IOKit
+  48 KB      64 KB          0 B       1062    __DATA_CONST
+  48 KB        0 B          0 B          3    CoreGraphics
+  48 KB        0 B          0 B         26    Owned physical footprint (unmapped)
+  36 KB        0 B          0 B          1    __OBJC_RW
+  32 KB        0 B          0 B          1    Activity Tracing
+  16 KB        0 B          0 B          1    Deferred Reclaim
+  16 KB        0 B          0 B          1    OS Alloc Once
+  16 KB        0 B          0 B          1    Foundation
+  16 KB        0 B          0 B          1    ColorSync
+    0 B        0 B        48 KB          3    SQLite Page Cache
+    0 B        0 B        32 KB          4    Image IO
+    0 B      14 MB          0 B         44    mapped file
+    0 B    1024 KB          0 B       1148    __TEXT
+    0 B     128 KB          0 B          3    __LINKEDIT
+    0 B        0 B          0 B          1    __OBJC_RO
+    0 B        0 B          0 B          1    __FONT_DATA
+    0 B        0 B          0 B          1    __CTF
+    0 B        0 B          0 B       1055    __AUTH_CONST
+    ---        ---          ---        ---    ---
+  99 MB      15 MB       800 KB       8855    TOTAL
+
+Auxiliary data:
+    phys_footprint: 99 MB
+    phys_footprint_peak: 381 MB

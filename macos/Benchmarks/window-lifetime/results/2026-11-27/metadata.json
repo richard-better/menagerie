@@ -1,0 +1,33 @@
+{
+  "date": "2026-11-27",
+  "os": "macOS 27.2 (26B123)",
+  "hardware": "Mac16,5, arm64",
+  "toolchain": "Xcode 27.2 (27B48), Swift 6.4.2",
+  "fleet": "One disposable test-mac, local temporary Git checkout and bare origin, no services or running jobs",
+  "agent_fixture_sha256": "96b7090f73a45b57e05bd5a449f309521827e7936ac005e8e596e3bfba242469",
+  "window_size_points": [
+    820,
+    760
+  ],
+  "timing_samples_per_boundary": 5,
+  "memory_samples_per_state": 1,
+  "cpu_deltas_per_state": 11,
+  "settle_seconds": 30,
+  "timing_endpoint": "First live display submission, not physical scanout",
+  "kept_lifetime": "Explicit orderOut; previous Swift normal close already destroyed its window",
+  "sources": {
+    "rust": "99a0aef + rust-timing.patch",
+    "kept": "4f14843 + prior-swift-timing.patch + WindowLifetime.swift at 954b746",
+    "released": "2878425"
+  },
+  "binary_sha256": {
+    "rust": "fbbfc135e55e2e72bd433a2324abfe4665778b4356a7600835a70a4556965983",
+    "kept": "2013451010956a5a8d927da1384149298041cd46519bd0b1cef28268f27a5543",
+    "released": "ae22a2549452a28dd23e84d6d5fe1fc7c7854fb2269395c84ec2036660b8d2a5"
+  },
+  "patch_sha256": {
+    "rust-timing.patch": "f78c29a62839fca232750ea1ca5de6c3414c6f27fb99eb407304b3e495e13f5f",
+    "prior-swift-timing.patch": "b46b7e29aa3cb2af3d699e6e39ff24b42faf3aea2f84467e87eea5cd2a341d4b"
+  },
+  "archive_normalization": "Only trailing whitespace and trailing empty lines removed from tool text; measurement values unchanged."
+}
