@@ -4,6 +4,12 @@ version: 1
 # its `origin/<branch>` to show how far ahead or behind they are.
 repo: ~/dev/gh/richard-better/mac
 branch: main
+# Optional: a command that drafts commit messages for the checkout's
+# uncommitted changes. It runs in the checkout with the diff on stdin and
+# prints the message. Without it, the message is made from the file names.
+commit_message: >-
+  claude -p --model haiku "Write a one-line Conventional Commits message
+  for the diff on stdin. Print only the message."
 machines:
   richard-m4-max:
     role: Workstation

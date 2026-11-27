@@ -25,6 +25,11 @@ pub struct Fleet {
     /// The branch machines should be on. Defaults to `main`.
     #[serde(default)]
     pub branch: Option<String>,
+    /// A shell command that drafts commit messages for your checkout's
+    /// changes, such as a coding agent's CLI. It runs in the checkout, gets
+    /// the diff on stdin, and prints the message; the first line is used.
+    #[serde(default)]
+    pub commit_message: Option<String>,
     /// Machines in the order the file lists them, keyed by hostname.
     #[serde(default)]
     pub machines: IndexMap<String, Machine>,
