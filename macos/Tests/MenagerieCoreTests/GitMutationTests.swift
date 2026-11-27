@@ -3,7 +3,10 @@ import Testing
 
 @testable import MenagerieCore
 
-@Test(arguments: ["rebase-merge", "rebase-apply", "MERGE_HEAD", "CHERRY_PICK_HEAD", "index.lock"])
+@Test(arguments: [
+  "rebase-merge", "rebase-apply", "MERGE_HEAD", "CHERRY_PICK_HEAD", "REVERT_HEAD", "sequencer",
+  "index.lock",
+])
 func existingGitOperationsAreNeverMutatedOrAborted(marker: String) throws {
   let repo = try Repository()
   defer { repo.remove() }
@@ -72,4 +75,45 @@ func autostashConflictNeverPushesTheRebasedCommit(viaCommit: Bool) throws {
   #expect(try Runner.git(remote, ["rev-parse", "HEAD"]) == upstream)
   #expect(!(try Runner.git(repo.path, ["ls-files", "-u"])).isEmpty)
   #expect(try Runner.git(repo.path, ["stash", "list"]).contains("autostash"))
+}
+
+@Test func interruptedMultiCommitRevertIsPreserved() throws {
+  let repo = try Repository()
+  defer { repo.remove() }
+  func commit(_ text: String) throws -> String {
+    try repo.write("file", text)
+    _ = try Runner.git(repo.path, ["add", "file"])
+    _ = try Runner.git(repo.path, ["commit", "-qm", text])
+    return try Runner.git(repo.path, ["rev-parse", "HEAD"]).trimmingCharacters(
+      in: .whitespacesAndNewlines)
+  }
+  _ = try commit("base")
+  let first = try commit("first")
+  let second = try commit("second")
+  _ = try commit("conflicting edit")
+  #expect(throws: (any Error).self) {
+    try Runner.git(repo.path, ["revert", "--no-edit", second, first])
+  }
+  let before = try Runner.git(repo.path, ["ls-files", "--stage"])
+  try repo.write("selected", "must not stage")
+  #expect(throws: (any Error).self) {
+    try Commit.commitAndPush(
+      repo: repo.path, branch: "main", paths: ["selected"], message: "must not commit")
+  }
+  #expect(try Runner.git(repo.path, ["ls-files", "--stage"]) == before)
+  #expect(FileManager.default.fileExists(atPath: repo.path + "/.git/REVERT_HEAD"))
+  #expect(FileManager.default.fileExists(atPath: repo.path + "/.git/sequencer"))
+}
+@Test(arguments: ["REVERT_HEAD", "sequencer"])
+func remotePullRefusesRevertState(marker: String) throws {
+  let repo = try Repository()
+  defer { repo.remove() }
+  try Data().write(to: URL(fileURLWithPath: repo.path + "/.git/" + marker))
+  let fleet = try Fleet.parse(
+    "version: 1\nmachines: {remote: {ssh: test@remote, sync: {preset: custom, repo: '\(repo.path)', command: echo}}}"
+  )
+  let command = try #require(
+    Deployment.plan(.sync, fleet: fleet, name: "remote").last?.command.arguments.last)
+  let result = try Runner.run(Command("/bin/sh", ["-c", command]))
+  #expect(result.status != 0 && result.output.contains("Git operation in progress: \(marker)"))
 }

@@ -87,7 +87,7 @@ public enum Deployment {
     let attr = sync.flake ?? (sync.preset == .homeManager ? machine.ssh ?? name : name)
     let ref = shellQuote("refs/heads/" + fleet.branch)
     let pull = """
-      for marker in rebase-merge rebase-apply MERGE_HEAD CHERRY_PICK_HEAD index.lock; do
+      for marker in rebase-merge rebase-apply MERGE_HEAD CHERRY_PICK_HEAD REVERT_HEAD sequencer index.lock; do
         test ! -e "$(git rev-parse --git-path "$marker")" || { echo "Git operation in progress: $marker"; exit 1; }
       done
       [ "$(git symbolic-ref --quiet HEAD)" = \(ref) ] || { echo 'Checkout is not on the configured branch'; exit 1; }

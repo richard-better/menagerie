@@ -20,7 +20,10 @@ public enum CheckoutMutation {
     return try body()
   }
   static func assertIdle(_ repo: String) throws {
-    for marker in ["rebase-merge", "rebase-apply", "MERGE_HEAD", "CHERRY_PICK_HEAD", "index.lock"] {
+    for marker in [
+      "rebase-merge", "rebase-apply", "MERGE_HEAD", "CHERRY_PICK_HEAD", "REVERT_HEAD", "sequencer",
+      "index.lock",
+    ] {
       let path = try Runner.git(
         repo, ["rev-parse", "--path-format=absolute", "--git-path", marker]
       ).trimmingCharacters(in: .whitespacesAndNewlines)
