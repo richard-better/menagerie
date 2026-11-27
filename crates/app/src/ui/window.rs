@@ -1043,32 +1043,28 @@ fn job_log(job: &crate::store::Job) -> impl IntoElement {
                 .flex()
                 .justify_between()
                 .items_center()
-                .mb(px(10.))
                 .child(
                     div()
                         .text_size(px(14.))
                         .font_weight(FontWeight::BOLD)
                         .child("Log"),
                 )
-                .child(
-                    div()
-                        .flex()
-                        .items_center()
-                        .gap(px(10.))
-                        .child(
-                            div()
-                                .font_family(theme::MONO)
-                                .text_size(px(11.))
-                                .text_color(colour)
-                                .child(state),
-                        )
-                        .when(running, |el| {
-                            el.child(
-                                text_button("cancel", "Cancel", true)
-                                    .on_click(move |_, _, _| cancel.cancel()),
-                            )
-                        }),
-                ),
+                .when(running, |el| {
+                    el.child(
+                        text_button("cancel", "Cancel", true)
+                            .on_click(move |_, _, _| cancel.cancel()),
+                    )
+                }),
+        )
+        // On its own line: a failure's reason can be a full sentence.
+        .child(
+            div()
+                .mt(px(4.))
+                .mb(px(10.))
+                .font_family(theme::MONO)
+                .text_size(px(11.5))
+                .text_color(colour)
+                .child(state),
         )
         .child(
             div()
