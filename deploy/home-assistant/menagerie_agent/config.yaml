@@ -1,0 +1,20 @@
+# A Home Assistant add-on that runs the Menagerie agent on Home Assistant OS, where the
+# system is read-only and add-ons are how anything long-lived runs. See README.md.
+name: Menagerie agent
+version: "0.1.0"
+slug: menagerie_agent
+description: Reports this machine's health to the Menagerie app.
+url: https://github.com/richard-better/menagerie
+arch:
+  - aarch64
+  - amd64
+startup: services
+boot: auto
+init: false
+# On the host's network, so the agent is reachable at the machine's own (and Tailscale)
+# address, and reports the machine's hostname.
+host_network: true
+options:
+  listen: "0.0.0.0:9184"
+schema:
+  listen: str

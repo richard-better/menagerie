@@ -29,8 +29,10 @@ pub fn memory(system: &mut System) -> Result<Usage, String> {
     })
 }
 
-/// The disk holding `/`. On macOS that is the read-only system volume's
-/// container, so the data volume is preferred when it is mounted.
+/// The disk holding `$MENAGERIE_AGENT_DISK` if set, else `/`. On macOS
+/// `/` is the read-only system volume's container, so the data volume is
+/// preferred when it is mounted. In a container, `/` is an overlay, so the
+/// variable names a mount on the real disk, such as an add-on's `/data`.
 pub fn disk() -> Result<Usage, String> {
     let disks = Disks::new_with_refreshed_list().map_err(|e| e.to_string())?;
     let pick = |mount: &str| {
@@ -38,9 +40,13 @@ pub fn disk() -> Result<Usage, String> {
             .iter()
             .find(|d| d.mount_point().to_str() == Some(mount))
     };
-    let disk = pick("/System/Volumes/Data")
-        .or_else(|| pick("/"))
-        .ok_or("no disk mounted at /")?;
+    let chosen = std::env::var("MENAGERIE_AGENT_DISK").ok();
+    let disk = match chosen.as_deref() {
+        Some(mount) => pick(mount).ok_or_else(|| format!("no disk mounted at {mount}"))?,
+        None => pick("/System/Volumes/Data")
+            .or_else(|| pick("/"))
+            .ok_or("no disk mounted at /")?,
+    };
     let total = disk.total_space();
     Ok(Usage {
         used_bytes: total.saturating_sub(disk.available_space()),
