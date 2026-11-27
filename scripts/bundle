@@ -34,6 +34,8 @@ if [ -z "$identity" ]; then
   exit 1
 fi
 
+scripts/build-ghostty
+
 swift build --package-path macos -c release
 bin=$(swift build --package-path macos -c release --show-bin-path)
 

@@ -1,0 +1,23 @@
+#!/bin/sh
+# The Ghostty revision vendored by libghostty-rs 4466c0f.
+set -eu
+root=$(cd "$(dirname "$0")/.." && pwd)
+rev=573c4a21e02311ae87844af26b6a7a179f82858e
+out="$root/target/ghostty"
+src="$root/target/ghostty-src"
+arch=$(uname -m)
+stamp="$rev zig-0.17.1 $arch macos-27.0 ReleaseFast"
+if [ -f "$out/build-stamp" ] && [ "$(cat "$out/build-stamp")" = "$stamp" ] && [ -f "$out/lib/libghostty-vt.a" ]; then exit 0; fi
+[ "$(cd "$root" && mise exec -- zig version)" = 0.17.1 ] || { echo 'Run mise install for Zig 0.17.1' >&2; exit 1; }
+if [ ! -d "$src/.git" ]; then
+  git init -q "$src"
+  git -C "$src" remote add origin https://github.com/ghostty-org/ghostty.git
+fi
+if ! git -C "$src" cat-file -e "$rev^{commit}" 2>/dev/null; then git -C "$src" fetch --depth 1 origin "$rev"; fi
+git -C "$src" checkout --detach "$rev"
+case "$arch" in arm64) cpu=aarch64 ;; x86_64) cpu=x86_64 ;; *) echo "Unsupported architecture: $arch" >&2; exit 1 ;; esac
+cd "$root"
+mise exec -- zig build --build-file "$src/build.zig" -Demit-lib-vt=true -Demit-xcframework=false -Dapp-runtime=none -Doptimize=ReleaseFast -Dcpu=baseline -Dtarget="$cpu-macos.27.0" --prefix "$out" --cache-dir "$root/target/ghostty-cache"
+# Link statically, even though Ghostty also installs a dylib.
+rm -f "$out/lib/libghostty-vt.dylib"
+printf '%s\n' "$stamp" > "$out/build-stamp"
