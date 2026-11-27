@@ -58,6 +58,7 @@ public enum Poller {
     request.httpMethod = "GET"
     // Incremental reads bound untrusted agent responses before decoding.
     let (bytes, response) = try await session.bytes(for: request)
+    defer { bytes.task.cancel() }
     guard let response = response as? HTTPURLResponse, (200..<300).contains(response.statusCode)
     else { throw FleetError("HTTP request failed") }
     var data = Data()
@@ -67,8 +68,34 @@ public enum Poller {
     }
     return (data, response)
   }
+  private static func agent(_ url: String, session: URLSession, deadline: Duration) async throws
+    -> Data
+  {
+    try await withThrowingTaskGroup(of: Data.self) { group in
+      group.addTask { try await get(url, session: session).0 }
+      group.addTask {
+        try await Task.sleep(for: deadline)
+        throw FleetError("Agent request exceeded total deadline")
+      }
+      defer { group.cancelAll() }
+      return try await group.next()!
+    }
+  }
+  private static func health(_ url: String, session: URLSession) async throws {
+    guard let url = URL(string: url) else { throw FleetError("Invalid URL") }
+    let (bytes, response) = try await session.bytes(
+      for: URLRequest(url: url, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: 3))
+    defer { bytes.task.cancel() }
+    guard let response = response as? HTTPURLResponse, (200..<300).contains(response.statusCode)
+    else { throw FleetError("HTTP request failed") }
+  }
+
   public static func poll(
-    _ fleet: Fleet, known: [String: LiveReport], session: URLSession = .shared
+    _ fleet: Fleet, known: [String: LiveReport], session: URLSession = .shared,
+    agentDeadline: Duration = .seconds(3),
+    onHealth: @Sendable ([String: String]) async -> Void = { _ in },
+    comparison: @Sendable (Fleet, [String: LiveReport], [String: LiveReport]) async -> PollResult =
+      compare
   ) async -> PollResult {
     var result = PollResult()
     await withTaskGroup(of: Response.self) { group in
@@ -76,9 +103,9 @@ public enum Poller {
         if let agent = machine.agent {
           group.addTask {
             do {
-              let (data, _) = try await get(
+              let data = try await Self.agent(
                 agent.trimmingCharacters(in: CharacterSet(charactersIn: "/")) + "/status",
-                session: session)
+                session: session, deadline: agentDeadline)
               return .agent(
                 name,
                 LiveReport(
@@ -96,7 +123,7 @@ public enum Poller {
             group.addTask {
               let start = Date()
               do {
-                _ = try await get(url, session: session)
+                try await Self.health(url, session: session)
                 return .service(
                   "\(name)/\(index)", "up · \(Int(Date().timeIntervalSince(start) * 1000)) ms")
               } catch {
@@ -109,13 +136,24 @@ public enum Poller {
       for await response in group {
         switch response {
         case .agent(let name, let observation): result.observations[name] = observation
-        case .service(let key, let health): result.health[key] = health
+        case .service(let key, let health):
+          result.health[key] = health
+          await onHealth(result.health)
         }
       }
     }
+    let git = await comparison(fleet, result.observations, known)
+    result.drift = git.drift
+    result.driftErrors = git.driftErrors
+    result.changes = git.changes
+    result.checkout = git.checkout
+    return result
+  }
+  public static func compare(
+    _ fleet: Fleet, _ observations: [String: LiveReport], _ known: [String: LiveReport]
+  ) async -> PollResult {
     if let repo = fleet.repoPath {
-      let observations = result.observations
-      let git = await Task.detached {
+      return await Task.detached {
         var result = PollResult()
         let upstream = "origin/" + fleet.branch
         let revisions = Set(
@@ -144,12 +182,8 @@ public enum Poller {
         }
         return result
       }.value
-      result.drift = git.drift
-      result.driftErrors = git.driftErrors
-      result.changes = git.changes
-      result.checkout = git.checkout
     }
-    return result
+    return PollResult()
   }
   public static func fetch(_ fleet: Fleet) async {
     guard let repo = fleet.repoPath else { return }

@@ -159,15 +159,22 @@ import Observation
     }
   }
   func poll(
-    using fetch: @Sendable (Fleet, [String: LiveReport]) async -> PollResult = {
-      await Poller.poll($0, known: $1)
-    }
+    using fetch: (@Sendable (Fleet, [String: LiveReport]) async -> PollResult)? = nil
   ) async {
     guard !polling, let fleet else { return }
     polling = true
     defer { polling = false }
     let generation = generation
-    let result = await fetch(fleet, observations)
+    let result: PollResult
+    if let fetch {
+      result = await fetch(fleet, observations)
+    } else {
+      result = await Poller.poll(
+        fleet, known: observations,
+        onHealth: { [weak self] health in
+          await self?.publishHealth(health, generation: generation)
+        })
+    }
     guard generation == self.generation else { return }
     for (name, var observation) in result.observations {
       if observation.report == nil {
@@ -182,6 +189,10 @@ import Observation
     changes = result.changes
     checkout = result.checkout
     updated = Date()
+  }
+  private func publishHealth(_ result: [String: String], generation: Int) {
+    guard generation == self.generation else { return }
+    health = result
   }
   func editFleet() {
     let url = URL(fileURLWithPath: fleetPath)
