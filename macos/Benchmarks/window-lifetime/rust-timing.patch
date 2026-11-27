@@ -1,0 +1,180 @@
+--- a/crates/app/src/lib.rs
++++ b/crates/app/src/lib.rs
+@@ -91,0 +92 @@
++pub static OPEN_TIME: std::sync::Mutex<Option<std::time::Instant>> = std::sync::Mutex::new(None);
+@@ -92,0 +94,12 @@
++    *OPEN_TIME.lock().unwrap() = Some(std::time::Instant::now());
++    if let Ok(path) = std::env::var("MENAGERIE_WINDOW_TRACE") {
++        use std::io::Write;
++        let _ = writeln!(
++            std::fs::OpenOptions::new().append(true).open(path).unwrap(),
++            "open {}",
++            std::time::SystemTime::now()
++                .duration_since(std::time::UNIX_EPOCH)
++                .unwrap()
++                .as_secs_f64()
++        );
++    }
+@@ -209,0 +223,6 @@
++
++pub fn bench_close(cx: &mut App) {
++    if let Some(handle) = cx.default_global::<MainWindow>().0 {
++        let _ = handle.update(cx, |_, window, _| window.remove_window());
++    }
++}
+--- a/crates/app/src/main.rs
++++ b/crates/app/src/main.rs
+@@ -77,0 +78,77 @@
++        if let Ok(trace) = std::env::var("MENAGERIE_WINDOW_TRACE") {
++            let mut pipe = [-1; 2];
++            assert_eq!(unsafe { libc::pipe(pipe.as_mut_ptr()) }, 0);
++            for fd in pipe {
++                unsafe {
++                    libc::fcntl(fd, libc::F_SETFD, libc::FD_CLOEXEC);
++                }
++            }
++            unsafe {
++                libc::fcntl(pipe[1], libc::F_SETFL, libc::O_NONBLOCK);
++            }
++            BENCH_WRITE_FD.store(pipe[1], std::sync::atomic::Ordering::Relaxed);
++            unsafe {
++                libc::signal(
++                    libc::SIGUSR1,
++                    bench_signal as *const () as libc::sighandler_t,
++                );
++            }
++            let (mut tx, mut commands) = futures::channel::mpsc::channel(1);
++            std::thread::spawn(move || {
++                let mut byte = 0u8;
++                loop {
++                    let n = unsafe { libc::read(pipe[0], (&mut byte as *mut u8).cast(), 1) };
++                    if n > 0 {
++                        let _ = tx.try_send(());
++                    } else if n == 0 {
++                        break;
++                    } else if std::io::Error::last_os_error().kind()
++                        != std::io::ErrorKind::Interrupted
++                    {
++                        break;
++                    }
++                }
++                unsafe {
++                    libc::close(pipe[0]);
++                }
++            });
++            let bench_store = store.clone();
++            cx.spawn(async move |cx| {
++                while commands.next().await.is_some() {
++                    if let Ok(command) = std::fs::read_to_string(format!("{trace}.command")) {
++                        if command == "open" {
++                            let _ = cx.update(|cx| {
++                                let mtm = MainThreadMarker::new().unwrap();
++                                panel.show_under(
++                                    menagerie_app::platform::Rect {
++                                        x: 20.0,
++                                        y: 20.0,
++                                        w: 1.0,
++                                        h: 1.0,
++                                    },
++                                    popover::WIDTH as f64,
++                                    popover::height(bench_store.read(cx)) as f64,
++                                    mtm,
++                                );
++                                cx.activate(true);
++                            });
++                            cx.background_executor()
++                                .timer(std::time::Duration::from_millis(500))
++                                .await;
++                            let _ = cx.update(|cx| {
++                                let mtm = MainThreadMarker::new().unwrap();
++                                assert!(
++                                    panel.is_visible(mtm),
++                                    "Benchmark popup was dismissed before open action"
++                                );
++                                panel.hide(mtm);
++                                open_main_window(bench_store.clone(), None, cx);
++                            });
++                        } else if command == "close" {
++                            let _ = cx.update(menagerie_app::bench_close);
++                        }
++                    }
++                }
++            })
++            .detach();
++        }
+@@ -82 +159,3 @@
+-                if !window.is_window_active() {
++                if std::env::var_os("MENAGERIE_WINDOW_TRACE").is_none()
++                    && !window.is_window_active()
++                {
+@@ -99,0 +179,3 @@
++                if std::env::var_os("MENAGERIE_WINDOW_TRACE").is_some() {
++                    continue;
++                }
+@@ -181,0 +264,13 @@
++
++static BENCH_WRITE_FD: std::sync::atomic::AtomicI32 = std::sync::atomic::AtomicI32::new(-1);
++extern "C" fn bench_signal(_: libc::c_int) {
++    unsafe {
++        let saved_errno = *libc::__error();
++        let fd = BENCH_WRITE_FD.load(std::sync::atomic::Ordering::Relaxed);
++        if fd >= 0 {
++            let byte = 1u8;
++            libc::write(fd, (&byte as *const u8).cast(), 1);
++        }
++        *libc::__error() = saved_errno;
++    }
++}
+--- a/crates/app/src/ui/window.rs
++++ b/crates/app/src/ui/window.rs
+@@ -746,0 +747,31 @@
++        if self
++            .store
++            .read(cx)
++            .selected
++            .as_ref()
++            .is_some_and(|n| self.store.read(cx).report(n).is_some())
++        {
++            if let Some(started) = crate::OPEN_TIME.lock().unwrap().take() {
++                _window.on_next_frame(move |_, _| {
++                    if let Ok(path) = std::env::var("MENAGERIE_WINDOW_TRACE") {
++                        use std::io::Write;
++                        let _ = writeln!(
++                            std::fs::OpenOptions::new()
++                                .append(true)
++                                .open(&path)
++                                .unwrap(),
++                            "display {}",
++                            std::time::SystemTime::now()
++                                .duration_since(std::time::UNIX_EPOCH)
++                                .unwrap()
++                                .as_secs_f64()
++                        );
++                        let _ = writeln!(
++                            std::fs::OpenOptions::new().append(true).open(path).unwrap(),
++                            "frame 1 {}",
++                            started.elapsed().as_secs_f64() * 1000.0
++                        );
++                    }
++                });
++            }
++        }
+--- a/crates/app/src/platform/tray.rs
++++ b/crates/app/src/platform/tray.rs
+@@ -79 +79,15 @@
+-        let title = (count > 0).then(|| count.to_string());
++        let title = std::env::var("MENAGERIE_TEST_TITLE")
++            .ok()
++            .or_else(|| (count > 0).then(|| count.to_string()));
++        if let (Ok(path), Some(r)) = (std::env::var("MENAGERIE_WINDOW_TRACE"), self.icon_rect()) {
++            use std::io::Write;
++            let _ = writeln!(
++                std::fs::OpenOptions::new().append(true).open(path).unwrap(),
++                "status {} {} {} {} {} 0 0",
++                std::process::id(),
++                r.x,
++                r.y,
++                r.w,
++                r.h
++            );
++        }
