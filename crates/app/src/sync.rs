@@ -10,6 +10,10 @@
 //! Touch ID works when it is enabled for sudo. Over SSH there is no one to
 //! ask, so remote commands that need root use `sudo -n` and fail with a
 //! clear message unless the machine allows them without a password.
+//!
+//! Sync deploys commits, never a working tree: every machine builds the
+//! commit its checkout is on, so uncommitted edits (often a tool rewriting
+//! its own settings) neither block a sync nor sneak into one.
 
 use std::io::{BufRead, BufReader};
 use std::path::Path;
@@ -118,7 +122,8 @@ pub fn plan(action: Action, fleet: &Fleet, name: &str, place: &Place) -> Result<
 
     // Sync is two-way: commits made in your checkout go up first, so the
     // machine can pull them. Checked when the sync runs, not from the last
-    // poll, so nothing committed or edited since is missed.
+    // poll, so nothing committed since is missed. Uncommitted changes are
+    // only mentioned: they aren't part of any sync.
     if action == Action::Sync
         && let Some(repo) = fleet.repo_path()
     {
@@ -130,9 +135,11 @@ pub fn plan(action: Action, fleet: &Fleet, name: &str, place: &Place) -> Result<
              if [ \"$(git symbolic-ref --quiet HEAD)\" != {head} ]; then\n\
              \x20 echo \"Your checkout isn't on the configured branch. Switch to it first.\" >&2; exit 1\n\
              fi\n\
-             changes=$(git status --porcelain --untracked-files=all --ignore-submodules=none) || exit 1\n\
-             if [ -n \"$changes\" ]; then\n\
-             \x20 echo 'Your checkout has uncommitted changes. Commit or stash them first.' >&2; exit 1\n\
+             n=$(git status --porcelain --untracked-files=all --ignore-submodules=none | wc -l | tr -d ' ')\n\
+             if [ \"$n\" = 1 ]; then\n\
+             \x20 echo '1 uncommitted file stays behind: Sync deploys commits only.'\n\
+             elif [ \"$n\" -gt 1 ] 2>/dev/null; then\n\
+             \x20 echo \"$n uncommitted files stay behind: Sync deploys commits only.\"\n\
              fi\n\
              ahead=$(git rev-list --count {upstream}..HEAD) || exit 1\n\
              if [ \"$ahead\" -gt 0 ]; then git push origin {refspec}; else echo 'Nothing to push.'; fi",
@@ -150,7 +157,9 @@ pub fn plan(action: Action, fleet: &Fleet, name: &str, place: &Place) -> Result<
         SyncPreset::HomeManager => machine.ssh.clone().unwrap_or_else(|| name.to_owned()),
         _ => name.to_owned(),
     });
-    let target = format!(".#{attr}");
+    // The commit the checkout is on, not its working tree: set by
+    // `FLAKE_AT_HEAD` in the script.
+    let target = format!("\"$flake\"{}", sh_quote(&format!("#{attr}")));
 
     // The machine's own commands, written as one shell script so they run
     // in its checkout, here or over SSH.
@@ -160,13 +169,13 @@ pub fn plan(action: Action, fleet: &Fleet, name: &str, place: &Place) -> Result<
     };
     let rebuild = match (action, sync.preset) {
         (Action::Sync, SyncPreset::NixDarwin) => {
-            format!("{sudo} darwin-rebuild switch --flake {}", sh_quote(&target))
+            format!("{sudo} darwin-rebuild switch --flake {target}")
         }
         (Action::Sync, SyncPreset::Nixos) => {
-            format!("{sudo} nixos-rebuild switch --flake {}", sh_quote(&target))
+            format!("{sudo} nixos-rebuild switch --flake {target}")
         }
         (Action::Sync, SyncPreset::HomeManager) => {
-            format!("home-manager switch --flake {}", sh_quote(&target))
+            format!("home-manager switch --flake {target}")
         }
         // In a subshell, so none of it runs if the pull fails.
         (Action::Sync, SyncPreset::Custom) => {
@@ -195,6 +204,7 @@ pub fn plan(action: Action, fleet: &Fleet, name: &str, place: &Place) -> Result<
                  \x20 echo \"The checkout on this machine isn't on the configured branch.\" >&2; exit 1\n\
                  fi\n\
                  git pull --ff-only origin {pull} || exit 1\n\
+                 {FLAKE_AT_HEAD}\n\
                  {rebuild}",
                 sh_path(&repo)
             )
@@ -231,6 +241,12 @@ pub fn plan(action: Action, fleet: &Fleet, name: &str, place: &Place) -> Result<
     steps.push(step);
     Ok(steps)
 }
+
+/// Sets `$flake` to the checkout (the current directory) at its HEAD
+/// commit, so a build ignores uncommitted changes. A `git+file` URL, so
+/// spaces in the path are escaped.
+const FLAKE_AT_HEAD: &str =
+    "flake=\"git+file://$(pwd -P | sed 's/ /%20/g')?rev=$(git rev-parse HEAD)\" || exit 1";
 
 /// Where to run `name`'s commands, or why they can't run anywhere.
 pub fn place(name: &str, machine: &Machine, hostname: &str) -> Result<Place, String> {
@@ -669,7 +685,9 @@ mod tests {
             "{script}"
         );
         assert!(
-            script.ends_with("sudo -A darwin-rebuild switch --flake '.#richard-m4-max'"),
+            script.ends_with(&format!(
+                "{FLAKE_AT_HEAD}\nsudo -A darwin-rebuild switch --flake \"$flake\"'#richard-m4-max'"
+            )),
             "{script}"
         );
         assert!(step.askpass);
@@ -687,7 +705,8 @@ mod tests {
         assert!(remote.starts_with("sh -lc 'cd ~/"), "{remote}");
         assert!(remote.contains("git pull --ff-only origin"), "{remote}");
         assert!(remote.contains("home-manager switch --flake"), "{remote}");
-        assert!(remote.contains(".#richard@richard-hp-server"), "{remote}");
+        assert!(remote.contains("#richard@richard-hp-server"), "{remote}");
+        assert!(remote.contains("?rev=$(git rev-parse HEAD)"), "{remote}");
         assert!(!step.askpass);
         let rollback = plan(Action::Rollback, &fleet(), "richard-hp-server", &place).unwrap();
         assert_eq!(rollback.len(), 1, "rolling back doesn't touch the checkout");
@@ -743,7 +762,7 @@ mod tests {
     }
 
     #[test]
-    fn the_checkout_step_refuses_dirty_trees_and_pushes_new_commits() {
+    fn the_checkout_step_mentions_dirty_trees_and_pushes_new_commits() {
         let dir = tempfile::tempdir().unwrap();
         let origin = dir.path().join("origin.git");
         let work = dir.path().join("work");
@@ -810,14 +829,58 @@ mod tests {
         assert_eq!(result, Ok(()), "{lines:?}");
         assert!(lines.iter().any(|l| l == "Nothing to push."), "{lines:?}");
 
+        // Uncommitted changes don't block: they are left out, and said so.
         std::fs::write(work.join("new.txt"), "untracked").unwrap();
         let (lines, result) = check(&f);
-        assert!(result.is_err());
+        assert_eq!(result, Ok(()), "{lines:?}");
         assert!(
-            lines.iter().any(|l| l.contains("uncommitted changes")),
+            lines
+                .iter()
+                .any(|l| l.starts_with("1 uncommitted file stays behind")),
             "{lines:?}"
         );
+        std::fs::write(work.join("other.txt"), "untracked").unwrap();
+        let (lines, _) = check(&f);
+        assert!(
+            lines
+                .iter()
+                .any(|l| l.starts_with("2 uncommitted files stay behind")),
+            "{lines:?}"
+        );
+
+        // The build is of HEAD's commit, from a path with a space in it.
+        let spaced = dir.path().join("a b");
+        git(
+            dir.path(),
+            &[
+                "clone",
+                "-q",
+                work.to_str().unwrap(),
+                spaced.to_str().unwrap(),
+            ],
+        );
+        let out = Command::new("/bin/sh")
+            .current_dir(&spaced)
+            .args(["-c", &format!("{FLAKE_AT_HEAD}\necho \"$flake\"")])
+            .output()
+            .unwrap();
+        let head = Command::new("git")
+            .arg("-C")
+            .arg(&spaced)
+            .args(["rev-parse", "HEAD"])
+            .output()
+            .unwrap();
+        let real = spaced.canonicalize().unwrap();
+        assert_eq!(
+            String::from_utf8_lossy(&out.stdout).trim(),
+            format!(
+                "git+file://{}?rev={}",
+                real.to_string_lossy().replace(' ', "%20"),
+                String::from_utf8_lossy(&head.stdout).trim()
+            )
+        );
         std::fs::remove_file(work.join("new.txt")).unwrap();
+        std::fs::remove_file(work.join("other.txt")).unwrap();
 
         git(&work, &["commit", "-q", "--allow-empty", "-m", "two"]);
         git(&work, &["tag", "origin/main", "HEAD"]);
