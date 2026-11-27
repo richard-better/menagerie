@@ -33,6 +33,26 @@ use crate::sync::Place;
 use crate::theme;
 
 const FONT_SIZE: f32 = 12.;
+/// Fonts to draw the terminal in, best first: a Nerd Font keeps prompt
+/// icons (starship, powerline) from turning into boxes.
+const FONTS: [&str; 4] = [
+    "JetBrainsMono Nerd Font Mono",
+    "JetBrainsMono Nerd Font",
+    "Symbols Nerd Font Mono",
+    theme::MONO,
+];
+
+/// The first of `FONTS` that is installed, looked up once.
+fn terminal_font(window: &Window) -> &'static str {
+    static FONT: std::sync::OnceLock<&'static str> = std::sync::OnceLock::new();
+    FONT.get_or_init(|| {
+        let installed = window.text_system().all_font_names();
+        FONTS
+            .into_iter()
+            .find(|f| installed.iter().any(|i| i == f))
+            .unwrap_or(theme::MONO)
+    })
+}
 const LINE_HEIGHT: f32 = 16.;
 /// Menlo's advance at 12pt, to size the grid.
 const CELL_WIDTH: f32 = 7.23;
@@ -723,11 +743,12 @@ impl Render for TerminalView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let focused = self.focus.is_focused(window);
         let cursor = self.cursor.filter(|_| focused && !self.exited);
-        // The real advance of Menlo here, so ASCII text lands on the grid.
+        // The real advance of the font in use, so ASCII text lands on the grid.
+        let font = terminal_font(window);
         let text_system = window.text_system();
         let cell = text_system
             .advance(
-                text_system.resolve_font(&gpui::font(theme::MONO)),
+                text_system.resolve_font(&gpui::font(font)),
                 px(FONT_SIZE),
                 'm',
             )
@@ -807,7 +828,7 @@ impl Render for TerminalView {
                     .w(cell * COLS as f32 + px(20.))
                     .h(px(LINE_HEIGHT * ROWS as f32 + 20.))
                     .p(px(10.))
-                    .font_family(theme::MONO)
+                    .font_family(font)
                     .text_size(px(FONT_SIZE))
                     .line_height(px(LINE_HEIGHT))
                     .children(rows),
@@ -817,7 +838,7 @@ impl Render for TerminalView {
                     div()
                         .px(px(10.))
                         .pb(px(8.))
-                        .font_family(theme::MONO)
+                        .font_family(font)
                         .text_size(px(FONT_SIZE))
                         .text_color(theme::mute())
                         .child("Starting…"),
@@ -828,7 +849,7 @@ impl Render for TerminalView {
                     div()
                         .px(px(10.))
                         .pb(px(8.))
-                        .font_family(theme::MONO)
+                        .font_family(font)
                         .text_size(px(FONT_SIZE))
                         .text_color(theme::mute())
                         .child("[session ended]"),
