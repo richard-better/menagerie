@@ -55,9 +55,11 @@ struct DotDrawing: NSViewRepresentable {
           values[column] = max(values[column] ?? 0, sample.value)
         }
         let scale = max(1, (values.values.max() ?? 0) * 1.15)
-        context.setFillColor(NSColor(Palette.ink.opacity(0.65)).cgColor)
-        for (column, sample) in values {
-          for row in 0..<max(0, min(12, Int(sample / scale * 12))) {
+        for column in 0..<columns {
+          let sample = values[column]
+          context.setFillColor(NSColor(Palette.ink.opacity(sample == nil ? 0.15 : 0.65)).cgColor)
+          let rows = sample.map { max(1, min(12, Int(($0 / scale * 12).rounded()))) } ?? 1
+          for row in 0..<rows {
             context.fillEllipse(
               in: CGRect(x: column * 6, y: Int(bounds.height) - row * 6 - 4, width: 3, height: 3))
           }

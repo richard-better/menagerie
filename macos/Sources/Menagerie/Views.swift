@@ -131,9 +131,16 @@ struct FleetView: View {
         if model.page != "details" {
           HStack {
             Button("Back", systemImage: "chevron.left") { model.page = "details" }
-            Spacer()
             Text(model.page.capitalized).foregroundStyle(Palette.muted)
-          }.buttonStyle(.glass)
+            Spacer()
+            if model.page == "terminal", let session = model.terminals[model.selected] {
+              Button("End session") {
+                session.transport.stop()
+                model.terminals[model.selected] = nil
+                model.page = "details"
+              }
+            }
+          }.buttonStyle(PanelButtonStyle())
         }
         switch model.page {
         case "commit": CommitPage(model: model)
@@ -148,18 +155,13 @@ struct FleetView: View {
         case "log": log
         case "terminal":
           if let session = model.terminals[model.selected] {
-            Button("End session") {
-              session.transport.stop()
-              model.terminals[model.selected] = nil
-              model.page = "details"
-            }.buttonStyle(.glass)
             TerminalPage(session: session).frame(maxWidth: .infinity, maxHeight: .infinity)
           }
         default:
           ScrollView {
             VStack(alignment: .leading, spacing: 20) { details }
               .frame(maxWidth: .infinity, alignment: .leading)
-          }
+          }.defaultScrollAnchor(.top).id(model.selected)
         }
       }.padding(26).padding(.top, 10).frame(
         maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading
@@ -196,10 +198,12 @@ struct FleetView: View {
         VStack(alignment: .leading, spacing: 8) {
           Text(model.selected).font(.title2).fontWeight(.semibold).textSelection(.enabled)
           Text(machine.role ?? "").foregroundStyle(Palette.muted)
-          if let system = model.observations[model.selected]?.report?.probes.system.value {
-            Text("\(system.os) · up \(system.uptimeS / 3600)h").font(.caption).foregroundStyle(
-              Palette.muted)
-          }
+          Text(
+            machineSubtitle(
+              machine,
+              uptime: model.observations[model.selected]?.report?.probes.system.value?.uptimeS)
+          )
+          .font(.caption).foregroundStyle(Palette.muted)
         }
         Spacer()
         VStack(alignment: .trailing, spacing: 8) {
@@ -213,7 +217,7 @@ struct FleetView: View {
               .font(.caption.monospaced()).foregroundStyle(Palette.muted).textSelection(.enabled)
           }
         }
-      }
+      }.fixedSize(horizontal: false, vertical: true)
       GlassEffectContainer {
         HStack {
           Button("Changes") { model.page = "changes" }
@@ -222,14 +226,14 @@ struct FleetView: View {
           Spacer()
           Button("Sync", systemImage: "arrow.trianglehead.2.clockwise") {
             model.deploy(model.selected, action: .sync)
-          }.buttonStyle(.glassProminent).tint(Palette.accent).disabled(
+          }.buttonStyle(PanelButtonStyle(primary: true)).disabled(
             machine.sync == nil || model.jobs[model.selected]?.running == true)
           Menu {
             Button("Roll back") { model.deploy(model.selected, action: .rollback) }
           } label: {
             Image(systemName: "ellipsis")
           }.disabled(machine.sync == nil)
-        }.buttonStyle(.glass)
+        }.buttonStyle(PanelButtonStyle())
       }
       Divider()
       if let note = model.comparisonNote(model.selected) {
@@ -240,18 +244,17 @@ struct FleetView: View {
         VStack(alignment: .leading) {
           HStack {
             Text("Load").fontWeight(.medium)
-            Spacer()
             Text(
-              report.probes.load.value.map { String(format: "%.2f / %d cores", $0.one, $0.cpus) }
+              report.probes.load.value.map { String(format: "%.2f / %d cpus", $0.one, $0.cpus) }
                 ?? "Unavailable"
-            ).monospacedDigit()
+            ).monospacedDigit().foregroundStyle(Palette.muted)
+            Spacer()
+            Picker("History", selection: $hours) {
+              Text("1h").tag(1)
+              Text("24h").tag(24)
+            }.pickerStyle(.segmented).labelsHidden().frame(width: 120)
           }
-          Picker("History", selection: $hours) {
-            Text("1h").tag(1)
-            Text("24h").tag(24)
-          }.pickerStyle(.segmented).labelsHidden().frame(width: 120)
-          LoadChart(samples: report.loadHistory, now: report.agent.now, hours: hours).frame(
-            height: 72)
+          LoadChart(samples: report.loadHistory, now: report.agent.now, hours: hours)
         }
         Grid(horizontalSpacing: 32, verticalSpacing: 20) {
           GridRow {
@@ -285,21 +288,23 @@ struct FleetView: View {
           description: Text(
             model.observations[model.selected]?.error ?? "This machine does not run an agent."))
       }
-      Divider()
-      Text("Services").fontWeight(.medium)
-      ForEach(Array(machine.services.enumerated()), id: \.offset) { index, service in
-        if let url = URL(string: service.url) {
-          HStack {
-            Link(destination: url) {
-              HStack {
-                ServiceIcon(service: service)
-                Text(service.name)
-                Image(systemName: "arrow.up.right")
+      if !machine.services.isEmpty {
+        Divider()
+        Text("Services").fontWeight(.medium)
+        ForEach(Array(machine.services.enumerated()), id: \.offset) { index, service in
+          if let url = URL(string: service.url) {
+            HStack {
+              Link(destination: url) {
+                HStack {
+                  ServiceIcon(service: service)
+                  Text(service.name)
+                  Image(systemName: "arrow.up.right")
+                }
               }
+              Spacer()
+              Text(model.health["\(model.selected)/\(index)"] ?? "No health check").font(.caption)
+                .foregroundStyle(Palette.muted)
             }
-            Spacer()
-            Text(model.health["\(model.selected)/\(index)"] ?? "No health check").font(.caption)
-              .foregroundStyle(Palette.muted)
           }
         }
       }
@@ -417,8 +422,24 @@ struct LoadChart: View {
   var now: Int64
   var hours: Int
   var body: some View {
-    DotDrawing(content: .history(samples.map { .init(at: $0.at, value: $0.value) }, now, hours))
-      .accessibilityLabel("Load history, \(samples.count) samples")
+    VStack(alignment: .leading, spacing: 6) {
+      Text(String(format: "peak %.2f", peak)).font(.caption).foregroundStyle(Palette.muted)
+      DotDrawing(content: .history(samples.map { .init(at: $0.at, value: $0.value) }, now, hours))
+        .frame(maxWidth: .infinity).frame(height: 72)
+        .accessibilityLabel("Load history, \(samples.count) samples")
+      HStack {
+        ForEach(Array(loadAxisLabels(hours: hours).enumerated()), id: \.offset) { index, label in
+          if index > 0 { Spacer() }
+          Text(label)
+        }
+      }.font(.caption).monospacedDigit().foregroundStyle(Palette.muted)
+    }
+  }
+  var peak: Double {
+    samples.filter {
+      let age = now.subtractingReportingOverflow($0.at)
+      return !age.overflow && (0...Int64(hours) * 3_600_000).contains(age.partialValue)
+    }.map(\.value).max() ?? 0
   }
 }
 
@@ -449,5 +470,30 @@ struct ServiceIcon: View {
     }.foregroundStyle(Palette.ink).frame(width: 24, height: 24)
       .background(Palette.raised, in: RoundedRectangle(cornerRadius: 6))
       .accessibilityLabel(service.name)
+  }
+}
+
+func machineSubtitle(_ machine: Machine, uptime: UInt64?) -> String {
+  let preset =
+    machine.sync.map { "\($0.preset.rawValue) sync" }
+    ?? (machine.agent == nil ? "Not managed by Menagerie" : "No sync configured")
+  guard let uptime else { return preset }
+  let duration = uptime >= 48 * 3600 ? "\(uptime / 86400)d" : "\(uptime / 3600)h"
+  return "\(preset) · up \(duration)"
+}
+func loadAxisLabels(hours: Int) -> [String] {
+  hours == 1 ? ["-60m", "-45m", "-30m", "-15m", "now"] : ["-24h", "-18h", "-12h", "-6h", "now"]
+}
+struct PanelButtonStyle: ButtonStyle {
+  var primary = false
+  @Environment(\.isEnabled) private var enabled
+  func makeBody(configuration: Configuration) -> some View {
+    let fill = primary && enabled ? Palette.accent : Palette.raised
+    configuration.label
+      .foregroundStyle(enabled ? (primary ? Palette.background : Palette.ink) : Palette.muted)
+      .padding(.horizontal, 12).padding(.vertical, 6)
+      .background(fill, in: .rect(cornerRadius: 8))
+      .glassEffect(.regular.tint(fill).interactive(), in: .rect(cornerRadius: 8))
+      .opacity(configuration.isPressed ? 0.8 : 1)
   }
 }
