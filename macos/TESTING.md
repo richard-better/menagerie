@@ -46,3 +46,5 @@ The old ignored Authorization Services test is retained as an opt-in test, becau
 Use a disposable `MENAGERIE_FLEET` and configuration checkout. Expand the menu bar manager's « item before testing. A zero-height status-item frame while the manager hides the icon is not a usable popover anchor. Left-click the app mark, check its popover arrow, right-click for Quit, and verify that Quit ends the test PID while leaving the owner's process intact.
 
 For comparisons, build the Rust baseline from the pre-port commit into an isolated target directory. Use the same disposable fleet, frozen agent response, selected machine, window size, and warm-up interval for both apps. Capture `footprint -p PID` and `top` samples after launch before any window, with the details window open, and 30 seconds after closing it. Stop only the explicitly recorded test PIDs.
+
+Meters and the load chart draw through Core Graphics in AppKit views, updating only when their inputs change. The footer records the last poll time rather than running a per-second relative timestamp. Keep the system glass controls and chrome when measuring rendering changes.

@@ -165,7 +165,9 @@ struct FleetView: View {
       HStack {
         Text(model.error ?? model.summary).lineLimit(1)
         Spacer()
-        if let updated = model.updated { Text(updated, style: .relative) }
+        if let updated = model.updated {
+          Text("Updated \(updated.formatted(.dateTime.hour().minute().second()))")
+        }
       }.font(.caption).foregroundStyle(Palette.muted).padding(12)
     }.foregroundStyle(Palette.ink).background(Palette.background).preferredColorScheme(.dark)
       .frame(minWidth: 680, minHeight: 560)
@@ -381,17 +383,8 @@ struct Dots: View {
   var fraction: Double
   var color: Color
   var body: some View {
-    Canvas { context, size in
-      let count = max(1, Int(size.width / 6))
-      for i in 0..<count {
-        for row in 0..<2 {
-          let rect = CGRect(x: CGFloat(i) * 6, y: CGFloat(row) * 6 + 2, width: 3, height: 3)
-          context.fill(
-            Path(roundedRect: rect, cornerRadius: 0.6),
-            with: .color(Double(i) / Double(count) < fraction ? color : Color(hex: 0x2f3b35)))
-        }
-      }
-    }.frame(height: 14).accessibilityLabel("\(Int(fraction * 100)) percent")
+    DotDrawing(content: .meter(fraction, color)).frame(height: 14).accessibilityLabel(
+      "\(Int(fraction * 100)) percent")
   }
 }
 struct UsageMeter: View {
@@ -421,28 +414,8 @@ struct LoadChart: View {
   var now: Int64
   var hours: Int
   var body: some View {
-    Canvas { context, size in
-      let interval = Int64(hours) * 3_600_000
-      let columns = max(1, Int(size.width / 6))
-      var values: [Int: Double] = [:]
-      for sample in samples {
-        let age = now.subtractingReportingOverflow(sample.at)
-        guard !age.overflow, (0...interval).contains(age.partialValue) else { continue }
-        let column = Int((1 - Double(age.partialValue) / Double(interval)) * Double(columns - 1))
-        values[column] = max(values[column] ?? 0, sample.value)
-      }
-      let scale = max(1, (values.values.max() ?? 0) * 1.15)
-      for (column, sample) in values {
-        let rows = max(0, min(12, Int(sample / scale * 12)))
-        for row in 0..<rows {
-          context.fill(
-            Path(
-              ellipseIn: CGRect(
-                x: column * 6, y: Int(size.height) - row * 6 - 4, width: 3, height: 3)),
-            with: .color(Palette.ink.opacity(0.65)))
-        }
-      }
-    }.accessibilityLabel("Load history, \(samples.count) samples")
+    DotDrawing(content: .history(samples.map { .init(at: $0.at, value: $0.value) }, now, hours))
+      .accessibilityLabel("Load history, \(samples.count) samples")
   }
 }
 
