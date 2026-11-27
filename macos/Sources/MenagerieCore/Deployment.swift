@@ -27,7 +27,7 @@ public enum Deployment {
   public static func run(
     _ steps: [DeploymentStep], cancel: Cancellation, output: @Sendable (String) -> Void
   ) throws {
-    try CheckoutMutation.run(repos: steps.flatMap(\.checkouts)) {
+    try CheckoutMutation.run(repos: steps.flatMap(\.checkouts), cancel: cancel) {
       try runUnlocked(steps, cancel: cancel, output: output)
     }
   }

@@ -31,6 +31,7 @@ import Observation
   private var commitGeneration = 0
   private(set) var loadingChanges = false
   private var mutatingCheckouts: Set<String> = []
+  private var resolvingCheckout = false
   private func context(for fleet: Fleet?) -> CommitContext? {
     guard let fleet, let repo = fleet.repoPath else { return nil }
     return CommitContext(repo: repo, branch: fleet.branch, draftCommand: fleet.commitMessage)
@@ -45,8 +46,17 @@ import Observation
     commitNote = ""
     drafting = false
   }
-  private func claim(_ paths: [String]) -> Set<String>? {
-    let keys = Set(paths.map(CheckoutMutation.key))
+  private func claim(_ paths: [String], cancel: Cancellation = Cancellation()) async -> Set<String>?
+  {
+    let keys: Set<String>
+    do {
+      keys = try await Task.detached {
+        Set(try paths.map { try CheckoutMutation.key($0, cancel: cancel) })
+      }.value
+    } catch {
+      self.error = String(describing: error)
+      return nil
+    }
     guard mutatingCheckouts.isDisjoint(with: keys) else {
       error = "A job is already mutating this checkout"
       return nil
@@ -233,7 +243,7 @@ import Observation
       NSWorkspace.shared.open(url)
     } catch { self.error = String(describing: error) }
   }
-  func deploy(
+  @discardableResult func deploy(
     _ name: String, action: Deployment.Action,
     run: @escaping @Sendable ([DeploymentStep], Cancellation, OutputBuffer) async throws -> Void = {
       steps, cancellation, buffer in
@@ -241,19 +251,20 @@ import Observation
         try Deployment.run(steps, cancel: cancellation, output: { buffer.append($0) })
       }.value
     }
-  ) {
-    guard let fleet, jobs[name]?.running != true else { return }
+  ) -> Task<Void, Never>? {
+    guard !resolvingCheckout, let fleet, jobs[name]?.running != true else { return nil }
     let steps: [DeploymentStep]
     do { steps = try Deployment.plan(action, fleet: fleet, name: name) } catch {
       self.error = String(describing: error)
-      return
+      return nil
     }
-    guard let paths = claim(steps.flatMap(\.checkouts)) else { return }
+    resolvingCheckout = true
     selected = name
     let job = Job()
     jobs[name] = job
     page = "log"
-    Task {
+    return Task {
+      var paths: Set<String> = []
       let logUpdates = Task {
         while job.running {
           job.text = job.output.text
@@ -265,6 +276,12 @@ import Observation
         job.text = job.output.text
       }
       do {
+        guard let claimed = await claim(steps.flatMap(\.checkouts), cancel: job.cancel) else {
+          resolvingCheckout = false
+          throw FleetError(error ?? "Checkout unavailable")
+        }
+        paths = claimed
+        resolvingCheckout = false
         try await run(steps, job.cancel, job.output)
         job.result = "Succeeded"
       } catch { job.result = String(describing: error) }
@@ -335,17 +352,24 @@ import Observation
   }
   func commit() {
     guard let captured = commitContext, captured == context(for: fleet), !committing,
-      !loadingChanges
+      !loadingChanges, !resolvingCheckout
     else { return }
     let repo = captured.repo
     let branch = captured.branch
-    guard let checkoutPaths = claim([repo]) else { return }
+    resolvingCheckout = true
     committing = true
     let paths = files.filter { included.contains($0.path) }.map(\.path)
     let message = message
     let token = commitGeneration
     Task {
+      var checkoutPaths: Set<String> = []
       do {
+        guard let claimed = await claim([repo]) else {
+          resolvingCheckout = false
+          throw FleetError(error ?? "Checkout unavailable")
+        }
+        checkoutPaths = claimed
+        resolvingCheckout = false
         let hash = try await Task.detached {
           try Commit.commitAndPush(repo: repo, branch: branch, paths: paths, message: message)
         }.value

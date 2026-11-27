@@ -66,6 +66,8 @@ private func reviewFleet(_ repo: String, branch: String = "main", command: Strin
   #expect(model.message == message && !model.drafting)
 }
 @MainActor @Test func popoverJobsSelectTheirMachineAndShareCheckoutExclusion() async throws {
+  let directory = try modelReviewRepository()
+  defer { try? FileManager.default.removeItem(at: directory) }
   let model = Model()
   model.fleet = try Fleet.parse(
     """
@@ -147,4 +149,41 @@ func commitRefusesChangedCheckoutSettings(setting: String) async throws {
   #expect(model.health["machine/0"] == "second")
   await gate.release()
   await comparison.value
+}
+
+private func modelReviewRepository() throws -> URL {
+  let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+  try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+  _ = try Runner.git(directory.path, ["init", "-q", "-b", "main"])
+  return directory
+}
+@MainActor @Test func jobsShareGitDirectoryIdentityAcrossRootAndSubdirectory() async throws {
+  let directory = try modelReviewRepository()
+  defer { try? FileManager.default.removeItem(at: directory) }
+  let subdirectory = directory.appendingPathComponent("nested")
+  try FileManager.default.createDirectory(at: subdirectory, withIntermediateDirectories: true)
+  func fleet(_ path: String, name: String) throws -> Fleet {
+    try Fleet.parse(
+      "version: 1\nrepo: '\(path)'\nmachines: {\(name): {agent: 'http://127.0.0.1:1', sync: {preset: custom, repo: '\(path)', command: echo}}}"
+    )
+  }
+  let model = Model()
+  let gate = ReviewGate()
+  model.fleet = try fleet(directory.path, name: "root")
+  let (entered, signal) = AsyncStream<Void>.makeStream()
+  let first = model.deploy(
+    "root", action: .sync,
+    run: { _, _, _ in
+      signal.yield()
+      await gate.wait()
+    })
+  for await _ in entered.prefix(1) {}
+  model.fleet = try fleet(subdirectory.path, name: "nested")
+  let second = model.deploy(
+    "nested", action: .sync, run: { _, _, _ in Issue.record("Same Git directory ran concurrently") }
+  )
+  await second?.value
+  #expect(model.jobs["nested"]?.result?.contains("already mutating") == true)
+  await gate.release()
+  await first?.value
 }

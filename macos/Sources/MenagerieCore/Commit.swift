@@ -183,7 +183,7 @@ public enum Commit {
     repo: String, branch: String, paths: [String], message: String,
     cancel: Cancellation = Cancellation()
   ) throws -> String {
-    try CheckoutMutation.run(repos: [repo]) {
+    try CheckoutMutation.run(repos: [repo], cancel: cancel) {
       try commitAndPushUnlocked(
         repo: repo, branch: branch, paths: paths, message: message, cancel: cancel)
     }

@@ -117,3 +117,17 @@ func remotePullRefusesRevertState(marker: String) throws {
   let result = try Runner.run(Command("/bin/sh", ["-c", command]))
   #expect(result.status != 0 && result.output.contains("Git operation in progress: \(marker)"))
 }
+
+@Test func checkoutIdentityUsesGitDirectoryFromAnySubdirectory() throws {
+  let repo = try Repository()
+  defer { repo.remove() }
+  let subdirectory = repo.path + "/nested"
+  try FileManager.default.createDirectory(atPath: subdirectory, withIntermediateDirectories: true)
+  let rootKey = try CheckoutMutation.key(repo.path)
+  #expect(rootKey.hasPrefix("/"))
+  #expect(try Runner.run(Command("/bin/test", [rootKey, "-ef", repo.path + "/.git"])).status == 0)
+  #expect(try CheckoutMutation.key(subdirectory) == rootKey)
+  _ = try CheckoutMutation.run(repos: [repo.path]) {
+    #expect(throws: (any Error).self) { try CheckoutMutation.run(repos: [subdirectory]) {} }
+  }
+}

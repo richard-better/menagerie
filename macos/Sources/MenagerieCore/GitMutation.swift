@@ -3,11 +3,17 @@ import Synchronization
 
 public enum CheckoutMutation {
   private static let active = Mutex<Set<String>>([])
-  public static func key(_ repo: String) -> String {
-    URL(fileURLWithPath: expandHome(repo)).standardizedFileURL.resolvingSymlinksInPath().path
+  public static func key(_ repo: String, cancel: Cancellation = Cancellation()) throws -> String {
+    let directory = try Runner.git(
+      expandHome(repo), ["rev-parse", "--absolute-git-dir"], cancel: cancel
+    )
+    .trimmingCharacters(in: .whitespacesAndNewlines)
+    return URL(fileURLWithPath: directory).standardizedFileURL.resolvingSymlinksInPath().path
   }
-  public static func run<T>(repos: [String], _ body: () throws -> T) throws -> T {
-    let keys = Set(repos.map(key))
+  public static func run<T>(
+    repos: [String], cancel: Cancellation = Cancellation(), _ body: () throws -> T
+  ) throws -> T {
+    let keys = Set(try repos.map { try key($0, cancel: cancel) })
     guard
       active.withLock({ paths in
         guard paths.isDisjoint(with: keys) else { return false }
@@ -16,16 +22,16 @@ public enum CheckoutMutation {
       })
     else { throw FleetError("A job is already mutating this checkout") }
     defer { active.withLock { $0.subtract(keys) } }
-    for repo in keys { try assertIdle(repo) }
+    for repo in Set(repos) { try assertIdle(repo, cancel: cancel) }
     return try body()
   }
-  static func assertIdle(_ repo: String) throws {
+  static func assertIdle(_ repo: String, cancel: Cancellation = Cancellation()) throws {
     for marker in [
       "rebase-merge", "rebase-apply", "MERGE_HEAD", "CHERRY_PICK_HEAD", "REVERT_HEAD", "sequencer",
       "index.lock",
     ] {
       let path = try Runner.git(
-        repo, ["rev-parse", "--path-format=absolute", "--git-path", marker]
+        repo, ["rev-parse", "--path-format=absolute", "--git-path", marker], cancel: cancel
       ).trimmingCharacters(in: .whitespacesAndNewlines)
       if FileManager.default.fileExists(atPath: path) {
         throw FleetError("Git operation in progress: \(marker)")
@@ -33,7 +39,7 @@ public enum CheckoutMutation {
     }
   }
   static func rebase(_ repo: String, cancel: Cancellation) throws {
-    try assertIdle(repo)
+    try assertIdle(repo, cancel: cancel)
     let started = Mutex(false)
     let result: CommandResult
     do {
