@@ -12,7 +12,7 @@ trap 'rm -rf "$work"' EXIT
 # mark, 36 px tall for the 18 pt menu bar at 2x.
 sed -e 's/currentColor/#000/' -e 's/viewBox="0 0 128 128"/viewBox="6 24 116 76"/' \
   assets/brand/menagerie-mark.svg >"$work/menubar.svg"
-render -h 36 "$work/menubar.svg" -o crates/app/assets/menubar.png
+render -h 36 "$work/menubar.svg" -o assets/brand/menubar.png
 
 # App icon: every size iconutil wants.
 set=$work/Menagerie.iconset
@@ -22,4 +22,4 @@ for size in 16 32 128 256 512; do
   render -w $((size * 2)) -h $((size * 2)) assets/brand/app-icon.svg -o "$set/icon_${size}x${size}@2x.png"
 done
 iconutil -c icns "$set" -o assets/brand/Menagerie.icns
-echo "Wrote crates/app/assets/menubar.png and assets/brand/Menagerie.icns"
+echo "Wrote assets/brand/menubar.png and assets/brand/Menagerie.icns"
