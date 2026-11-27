@@ -80,14 +80,19 @@ pub fn changes(repo: &Path) -> Result<Vec<Change>, String> {
     Ok(out)
 }
 
-/// Lines in a small text file.
-fn line_count(path: &Path) -> Option<u32> {
-    let meta = std::fs::metadata(path).ok()?;
-    if meta.len() > NEW_FILE_MAX {
+/// A small regular file's text. Never through a symlink, which could
+/// point anywhere, such as at an SSH key.
+fn small_text(path: &Path) -> Option<String> {
+    let meta = std::fs::symlink_metadata(path).ok()?;
+    if !meta.is_file() || meta.len() > NEW_FILE_MAX {
         return None;
     }
-    let text = std::fs::read_to_string(path).ok()?;
-    Some(text.lines().count() as u32)
+    std::fs::read_to_string(path).ok()
+}
+
+/// Lines in a small text file.
+fn line_count(path: &Path) -> Option<u32> {
+    Some(small_text(path)?.lines().count() as u32)
 }
 
 /// A message made from the changed files' names, used until (or instead
@@ -155,9 +160,7 @@ pub fn draft_input(repo: &Path, changes: &[Change]) -> Result<(String, Vec<Strin
         text.push_str(&git(repo, &args)?);
     }
     for change in untracked {
-        let path = repo.join(&change.path);
-        let small = std::fs::metadata(&path).is_ok_and(|m| m.len() <= NEW_FILE_MAX);
-        match std::fs::read_to_string(&path).ok().filter(|_| small) {
+        match small_text(&repo.join(&change.path)) {
             Some(body) => text.push_str(&format!("\nNew file {}:\n{body}\n", change.path)),
             None => text.push_str(&format!("\nNew file {} (not shown)\n", change.path)),
         }
@@ -279,7 +282,9 @@ fn git_command(repo: &Path) -> Command {
         .arg("-C")
         .arg(repo)
         .env("GIT_TERMINAL_PROMPT", "0")
-        .env("GIT_NO_LAZY_FETCH", "1");
+        .env("GIT_NO_LAZY_FETCH", "1")
+        // File names are names, never pathspec magic such as `:(glob)*`.
+        .env("GIT_LITERAL_PATHSPECS", "1");
     command
 }
 
@@ -441,6 +446,18 @@ mod tests {
         assert!(input.contains("New file notes.md:\nhello"), "{input}");
         assert!(!input.contains("hunter2"), "{input}");
         assert_eq!(withheld, vec![".env".to_owned()]);
+        // A new symlink is named, never followed.
+        std::os::unix::fs::symlink(work.join(".env"), work.join("innocent.txt")).unwrap();
+        let (input, _) = draft_input(&work, &changes(&work).unwrap()).unwrap();
+        assert!(
+            input.contains("New file innocent.txt (not shown)"),
+            "{input}"
+        );
+        assert!(!input.contains("hunter2"), "{input}");
+        // Names are literal, not pathspec magic.
+        std::fs::write(work.join(":(glob)*"), "x\n").unwrap();
+        let listed = changes(&work).unwrap();
+        assert!(listed.iter().any(|c| c.path == ":(glob)*"), "{listed:?}");
         assert!(looks_secret("secrets/api-token.txt"));
         assert!(looks_secret("keys/id_ed25519"));
         assert!(!looks_secret("config/hex/settings.json"));
