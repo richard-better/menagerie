@@ -165,7 +165,8 @@ struct FleetView: View {
         case "log": log
         case "terminal":
           if let session = model.terminals[model.selected] {
-            TerminalPage(session: session).frame(maxWidth: .infinity, maxHeight: .infinity)
+            TerminalPage(session: session).id(ObjectIdentifier(session)).frame(
+              maxWidth: .infinity, maxHeight: .infinity)
           }
         default:
           ScrollView {

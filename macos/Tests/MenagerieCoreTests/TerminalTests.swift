@@ -180,3 +180,11 @@ import Testing
   #expect(red?.foreground != nil)
   #expect(frame.runs.allSatisfy { Set($0.glyphs.map(\.row)).count == 1 })
 }
+
+@Test func pasteLimitRejectsWholeUTF8Payload() {
+  let large = String(repeating: "界", count: 100000)
+  #expect(TerminalInput.paste(large, bracketed: false).isEmpty)
+  #expect(TerminalInput.paste(large, bracketed: true).isEmpty)
+  let limit = String(repeating: "a", count: TerminalInput.pasteLimit)
+  #expect(TerminalInput.paste(limit, bracketed: false) == Data(limit.utf8))
+}

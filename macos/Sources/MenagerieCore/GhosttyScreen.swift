@@ -150,10 +150,15 @@ public enum TerminalInput {
     guard !value.isEmpty else { return nil }
     return Data(((alt ? "\u{1b}" : "") + value).utf8)
   }
+  public static func pasteRejection(_ text: String) -> String? {
+    let bytes = text.utf8.count
+    return bytes > pasteLimit
+      ? "Not pasted: \((bytes + 1023) / 1024) KB is more than the 256 KB limit." : nil
+  }
   public static func paste(_ text: String, bracketed: Bool) -> Data {
+    guard pasteRejection(text) == nil else { return Data() }
     let safe = bracketed ? text.replacingOccurrences(of: "\u{1b}", with: "") : text
-    var bytes = Array(safe.utf8.prefix(pasteLimit))
-    while String(bytes: bytes, encoding: .utf8) == nil { bytes.removeLast() }
+    let bytes = Array(safe.utf8)
     return bracketed
       ? Data(Array("\u{1b}[200~".utf8) + bytes + Array("\u{1b}[201~".utf8)) : Data(bytes)
   }

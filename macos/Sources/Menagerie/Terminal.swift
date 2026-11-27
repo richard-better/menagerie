@@ -31,6 +31,7 @@ struct TerminalPage: NSViewRepresentable {
 }
 @MainActor final class TerminalGridView: NSView {
   var transport: PTYSession?
+  private(set) var pasteNotice: String?
   private var frameState = TerminalFrame()
   private var revision: UInt64 = 0
   private var timer: Timer?
@@ -161,6 +162,15 @@ struct TerminalPage: NSViewRepresentable {
         ).insetBy(dx: 0.5, dy: 0.5)
       ).stroke()
     }
+    if let pasteNotice {
+      let rect = NSRect(
+        x: 8, y: max(0, bounds.height - 28), width: max(0, bounds.width - 16), height: 24)
+      color(0x232d28).setFill()
+      rect.fill()
+      (pasteNotice as NSString).draw(
+        in: rect.insetBy(dx: 6, dy: 4),
+        withAttributes: [.font: NSFont.systemFont(ofSize: 12), .foregroundColor: color(0xd9a657)])
+    }
   }
   private func cell(at point: NSPoint) -> Int {
     let column = max(0, min(frameState.columns - 1, Int((point.x - 10) / cellWidth)))
@@ -189,6 +199,18 @@ struct TerminalPage: NSViewRepresentable {
   }
   @objc func paste(_ sender: Any?) {
     guard let text = NSPasteboard.general.string(forType: .string) else { return }
+    pasteText(text)
+  }
+  func pasteText(_ text: String) {
+    pasteNotice = TerminalInput.pasteRejection(text)
+    needsDisplay = true
+    setAccessibilityHelp(
+      pasteNotice ?? "Select text with the mouse and press Command-C to copy. Paste with Command-V."
+    )
+    if pasteNotice != nil {
+      NSAccessibility.post(element: self, notification: .valueChanged)
+      return
+    }
     transport?.input.enqueue(TerminalInput.paste(text, bracketed: frameState.bracketedPaste))
   }
   override func performKeyEquivalent(with event: NSEvent) -> Bool {

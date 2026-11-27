@@ -68,7 +68,7 @@ import Observation
   }
   func openTerminal() {
     guard let machine = fleet?.machines[selected] else { return }
-    if terminals[selected] == nil {
+    if terminals[selected] == nil || terminals[selected]?.transport.finished == true {
       terminals[selected] = TerminalSession(
         machine: machine, name: selected, directory: fleet?.repoPath)
     }
