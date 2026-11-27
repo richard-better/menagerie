@@ -19,6 +19,7 @@ if [ ! -d "$src/.git" ]; then
 fi
 if ! git -C "$src" cat-file -e "$rev^{commit}" 2>/dev/null; then git -C "$src" fetch --depth 1 origin "$rev"; fi
 git -C "$src" checkout --detach "$rev"
+git -C "$src" diff --quiet "$rev" -- || { echo "Ghostty source cache has tracked edits: $src" >&2; exit 1; }
 case "$arch" in arm64) cpu=aarch64 ;; x86_64) cpu=x86_64 ;; *) echo "Unsupported architecture: $arch" >&2; exit 1 ;; esac
 cd "$root"
 mise exec -- zig build --build-file "$src/build.zig" -Demit-lib-vt=true -Demit-xcframework=false -Dapp-runtime=none -Doptimize=ReleaseFast -Dcpu=baseline -Dtarget="$cpu-macos.27.0" --prefix "$out" --cache-dir "$root/target/ghostty-cache"
