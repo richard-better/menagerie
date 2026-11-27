@@ -25,7 +25,8 @@ public enum Commit {
   }
   public static func changes(repo: String) throws -> [Change] {
     let repo = try worktreeRoot(repo)
-    let numstat = try Runner.git(repo, ["diff", "HEAD", "--numstat", "--no-renames", "-z"])
+    let numstat = try Runner.git(
+      repo, ["diff", "HEAD", "--numstat", "--no-renames", "--ignore-submodules=none", "-z"])
     var counts: [String: Change.LineCounts] = [:]
     for entry in numstat.split(separator: "\0") {
       let fields = entry.split(separator: "\t", maxSplits: 2, omittingEmptySubsequences: false)
@@ -35,7 +36,10 @@ public enum Commit {
     }
     return try Runner.git(
       repo,
-      ["-c", "status.renames=false", "status", "--porcelain=v1", "-z", "--untracked-files=all"]
+      [
+        "-c", "status.renames=false", "status", "--porcelain=v1", "-z", "--untracked-files=all",
+        "--ignore-submodules=none",
+      ]
     )
     .split(separator: "\0").compactMap { entry in
       guard entry.utf8.count > 3 else { return nil }
@@ -250,8 +254,10 @@ public enum Commit {
     _ = try git(["hook", "run", "--ignore-missing", "commit-msg", "--", messageFile.path])
     try rejectDirectories()
     let tree = try git(["write-tree"]).trimmingCharacters(in: .whitespacesAndNewlines)
-    let changed = try git(["diff", "--name-only", "--no-renames", "-z", head, tree, "--"])
-      .split(separator: "\0").map(String.init)
+    let changed = try git([
+      "diff", "--name-only", "--no-renames", "--ignore-submodules=none", "-z", head, tree, "--",
+    ])
+    .split(separator: "\0").map(String.init)
     guard Set(changed) == Set(paths) else {
       throw FleetError("Selected files changed while preparing the commit. Reload changes first.")
     }

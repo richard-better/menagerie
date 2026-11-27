@@ -194,7 +194,8 @@ public enum Poller {
         if let output = try? Runner.git(
           repo, ["rev-list", "--left-right", "--count", "--end-of-options", upstream + "...HEAD"]),
           let counts = try? Counts.parse(output),
-          let dirty = try? Runner.git(repo, ["status", "--porcelain", "--untracked-files=normal"])
+          let dirty = try? Runner.git(
+            repo, ["status", "--porcelain", "--untracked-files=normal", "--ignore-submodules=none"])
         {
           result.checkout = Checkout(counts: counts, dirty: !dirty.isEmpty)
         }

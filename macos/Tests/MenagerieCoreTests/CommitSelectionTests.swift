@@ -67,3 +67,26 @@ import Testing
   #expect(try Runner.git(repo.path, ["rev-parse", "HEAD"]) == before)
   #expect(try Runner.git(repo.path, ["diff", "--cached", "--name-only"]).isEmpty)
 }
+
+@Test func selectedTreeCannotHideHookStagedSubmodule() throws {
+  let repo = try Repository()
+  defer { repo.remove() }
+  let first = try Runner.git(repo.path, ["rev-parse", "HEAD"]).trimmingCharacters(
+    in: .whitespacesAndNewlines)
+  _ = try Runner.git(
+    repo.path, ["update-index", "--add", "--cacheinfo", "160000," + first + ",hidden"])
+  _ = try Runner.git(repo.path, ["commit", "-qm", "gitlink"])
+  let before = try Runner.git(repo.path, ["rev-parse", "HEAD"])
+  let next = before.trimmingCharacters(in: .whitespacesAndNewlines)
+  _ = try Runner.git(repo.path, ["config", "diff.ignoreSubmodules", "all"])
+  try repo.write("selected", "included")
+  let hook = repo.path + "/.git/hooks/pre-commit"
+  try "#!/bin/sh\ngit update-index --cacheinfo 160000,\(next),hidden\n".write(
+    toFile: hook, atomically: true, encoding: .utf8)
+  try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: hook)
+  #expect(throws: (any Error).self) {
+    try Commit.commitAndPush(
+      repo: repo.path, branch: "main", paths: ["selected"], message: "selected only")
+  }
+  #expect(try Runner.git(repo.path, ["rev-parse", "HEAD"]) == before)
+}
