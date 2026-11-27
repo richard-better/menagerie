@@ -16,9 +16,12 @@ import SwiftUI
   let destination: Command?
   static func command(machine: Machine, name: String) -> Command? {
     if Deployment.isLocal(name, machine) {
+      let checkout = machine.sync?.repo.map(expandHome) ?? NSHomeDirectory()
+      var isDirectory: ObjCBool = false
+      let exists = FileManager.default.fileExists(atPath: checkout, isDirectory: &isDirectory)
       return Command(
         ProcessInfo.processInfo.environment["SHELL"] ?? "/bin/zsh", ["-l"],
-        directory: machine.sync?.repo.map(expandHome) ?? NSHomeDirectory())
+        directory: exists && isDirectory.boolValue ? checkout : NSHomeDirectory())
     }
     return machine.ssh.map { Command("/usr/bin/ssh", ["-tt", "--", $0]) }
   }

@@ -5,17 +5,20 @@ import Testing
 @testable import Menagerie
 
 @MainActor @Test func localTerminalUsesSelectedCheckoutAndHomeFallback() throws {
+  let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+  try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+  defer { try? FileManager.default.removeItem(at: directory) }
   let fleet = try Fleet.parse(
     """
     version: 1
     repo: /controller
     machines:
-      selected: {agent: 'http://localhost:9184', sync: {preset: custom, repo: ~/selected, command: echo}}
+      selected: {agent: 'http://localhost:9184', sync: {preset: custom, repo: '\(directory.path)', command: echo}}
       unmanaged: {agent: 'http://localhost:9184'}
     """)
   #expect(
     TerminalSession.command(machine: fleet.machines["selected"]!, name: "selected")?.directory
-      == NSHomeDirectory() + "/selected")
+      == directory.path)
   #expect(
     TerminalSession.command(machine: fleet.machines["unmanaged"]!, name: "unmanaged")?.directory
       == NSHomeDirectory())
@@ -43,4 +46,17 @@ func fleetReloadEndsSessionsWithChangedDestinations(change: String) async throws
   await model.reload()
   #expect(model.terminals.isEmpty && model.page == "details")
   #expect(!session.transport.input.enqueue(Data("must not reach old host".utf8)))
+}
+
+@MainActor @Test(arguments: [false, true])
+func localTerminalFallsBackWhenCheckoutIsNotADirectory(isFile: Bool) throws {
+  let path = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+  defer { try? FileManager.default.removeItem(at: path) }
+  if isFile { try Data().write(to: path) }
+  let fleet = try Fleet.parse(
+    "version: 1\nmachines: {test: {agent: 'http://localhost:9184', sync: {preset: custom, repo: '\(path.path)', command: echo}}}"
+  )
+  #expect(
+    TerminalSession.command(machine: fleet.machines["test"]!, name: "test")?.directory
+      == NSHomeDirectory())
 }
