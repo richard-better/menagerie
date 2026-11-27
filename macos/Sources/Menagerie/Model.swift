@@ -152,19 +152,11 @@ import Observation
       }
       do {
         let steps = try Deployment.plan(action, fleet: fleet, name: name)
-        for step in steps {
-          job.append("▸ " + step.label + "\n")
-          let cancellation = job.cancel
-          let buffer = job.output
-          let result = try await Task.detached {
-            let output: @Sendable (String) -> Void = { buffer.append($0) }
-            if step.administrator {
-              return try Administrator.run(step.command, cancel: cancellation, output: output)
-            }
-            return try Runner.run(step.command, cancel: cancellation, output: output)
-          }.value
-          _ = try result.checked()
-        }
+        let cancellation = job.cancel
+        let buffer = job.output
+        try await Task.detached {
+          try Deployment.run(steps, cancel: cancellation, output: { buffer.append($0) })
+        }.value
         job.result = "Succeeded"
       } catch { job.result = String(describing: error) }
       job.running = false

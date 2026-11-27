@@ -21,14 +21,31 @@ public enum Deployment {
     return name.lowercased() == hostname.lowercased() || host == "localhost" || host == "[::1]"
       || host == "::1" || ipv4Loopback
   }
+  public static func run(
+    _ steps: [DeploymentStep], cancel: Cancellation, output: @Sendable (String) -> Void
+  ) throws {
+    for step in steps {
+      guard !cancel.isCancelled else { throw FleetError("Cancelled") }
+      output("▸ " + step.label + "\n")
+      let result =
+        try step.administrator
+        ? Administrator.run(step.command, cancel: cancel, output: output)
+        : Runner.run(step.command, cancel: cancel, output: output)
+      _ = try result.checked()
+    }
+  }
   public static func pushScript(repo: String, branch: String) -> String {
     let ref = shellQuote("refs/heads/" + branch)
     return """
       cd \(shellQuote(repo)) || exit 1
       [ "$(git symbolic-ref --quiet HEAD)" = \(ref) ] || { echo 'Checkout is not on the configured branch'; exit 1; }
+      n=$(git status --porcelain --untracked-files=all --ignore-submodules=none | wc -l | tr -d ' ')
+      if [ "$n" = 1 ]; then echo '1 uncommitted file stays behind: Sync deploys commits only.'
+      elif [ "$n" -gt 1 ]; then echo "$n uncommitted files stay behind: Sync deploys commits only."
+      fi
       git fetch -q origin \(ref) || exit 1
       ahead=$(git rev-list --count FETCH_HEAD..HEAD) || exit 1
-      [ "$ahead" -gt 0 ] || exit 0
+      [ "$ahead" -gt 0 ] || { echo 'Nothing to push.'; exit 0; }
       if ! git merge-base --is-ancestor FETCH_HEAD HEAD; then
         git rebase -q --autostash FETCH_HEAD || { git rebase --abort; exit 1; }
       fi
