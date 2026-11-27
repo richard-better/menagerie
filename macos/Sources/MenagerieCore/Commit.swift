@@ -17,7 +17,14 @@ public enum Commit {
     text.unicodeScalars.map { $0.properties.generalCategory == .control ? " " : String($0) }
       .joined()
   }
+  public static func worktreeRoot(_ repo: String, cancel: Cancellation = Cancellation()) throws
+    -> String
+  {
+    let output = try Runner.git(repo, ["rev-parse", "--show-toplevel"], cancel: cancel)
+    return output.hasSuffix("\n") ? String(output.dropLast()) : output
+  }
   public static func changes(repo: String) throws -> [Change] {
+    let repo = try worktreeRoot(repo)
     let numstat = try Runner.git(repo, ["diff", "HEAD", "--numstat", "--no-renames", "-z"])
     var counts: [String: Change.LineCounts] = [:]
     for entry in numstat.split(separator: "\0") {
@@ -104,6 +111,7 @@ public enum Commit {
   public static func draftInput(repo: String, changes: [Change]) throws -> (
     text: String, withheld: [String]
   ) {
+    let repo = try worktreeRoot(repo)
     let shared = changes.filter { !looksSecret($0.path) }
     var tracked: [String] = []
     var untracked: [String] = []
@@ -134,6 +142,7 @@ public enum Commit {
   public static func draft(
     command: String, repo: String, input: String, cancel: Cancellation = Cancellation()
   ) throws -> String {
+    let repo = try worktreeRoot(repo, cancel: cancel)
     let output = try Runner.run(
       Command("/bin/sh", ["-lc", command], directory: repo, input: Data(input.utf8)), cancel: cancel
     ).checked()
@@ -192,9 +201,10 @@ public enum Commit {
     repo: String, branch: String, paths: [String], message: String,
     cancel: Cancellation = Cancellation()
   ) throws -> String {
-    try CheckoutMutation.run(repos: [repo], cancel: cancel) {
+    let root = try worktreeRoot(repo, cancel: cancel)
+    return try CheckoutMutation.run(repos: [root], cancel: cancel) {
       try commitAndPushUnlocked(
-        repo: repo, branch: branch, paths: paths, message: message, cancel: cancel)
+        repo: root, branch: branch, paths: paths, message: message, cancel: cancel)
     }
   }
   private static func commitAndPushUnlocked(
