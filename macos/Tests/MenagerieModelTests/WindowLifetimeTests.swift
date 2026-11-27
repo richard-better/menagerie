@@ -20,7 +20,9 @@ import Testing
 
 @MainActor @Test func closingWindowDropsSessionsAndDraftButPreservesSelectionAndJobs() throws {
   let model = Model()
-  let machine = try Fleet.parse("version: 1\nmachines: {test: {}}").machines["test"]!
+  let fleet = try Fleet.parse("version: 1\nmachines: {first: {}, test: {}}")
+  model.fleet = fleet
+  let machine = fleet.machines["test"]!
   model.selected = "test"
   model.page = "terminal"
   model.message = "draft"

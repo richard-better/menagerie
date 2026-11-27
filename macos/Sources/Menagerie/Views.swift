@@ -424,18 +424,23 @@ struct LoadChart: View {
 
 struct ServiceIcon: View {
   let service: Service
-  private static let glyphs: [String: NSImage] = {
-    let urls = Bundle.main.urls(forResourcesWithExtension: "svg", subdirectory: "services") ?? []
-    return Dictionary(
-      uniqueKeysWithValues: urls.compactMap { url in
-        guard let image = NSImage(contentsOf: url) else { return nil }
-        image.isTemplate = true
-        return (url.deletingPathExtension().lastPathComponent, image)
+  private static let resources = Dictionary(
+    uniqueKeysWithValues: (Bundle.main.urls(
+      forResourcesWithExtension: "svg", subdirectory: "services") ?? []).map {
+        ($0.deletingPathExtension().lastPathComponent, $0)
       })
-  }()
+  private static var glyphs: [String: NSImage] = [:]
+  static func releaseImages() { glyphs.removeAll() }
+  private static func glyph(_ name: String) -> NSImage? {
+    if let cached = glyphs[name] { return cached }
+    guard let url = resources[name], let image = NSImage(contentsOf: url) else { return nil }
+    image.isTemplate = true
+    glyphs[name] = image
+    return image
+  }
   var body: some View {
     Group {
-      if let name = service.icon, let glyph = Self.glyphs[name] {
+      if let name = service.icon, let glyph = Self.glyph(name) {
         Image(nsImage: glyph).renderingMode(.template).resizable().scaledToFit()
           .frame(width: 13.2, height: 13.2)
       } else {

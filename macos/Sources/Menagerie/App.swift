@@ -8,6 +8,10 @@ import SwiftUI
     let model = delegate.model
     return WindowGroup("Menagerie", id: "fleet") {
       FleetView(model: model).task { model.start() }
+        .onDisappear {
+          model.closeWindow()
+          ServiceIcon.releaseImages()
+        }
         .background(
           WindowLifetime(
             live: model.observations[model.selected]?.report != nil,
@@ -16,7 +20,7 @@ import SwiftUI
       ProcessInfo.processInfo.arguments.contains("--show-window") ? .presented : .suppressed)
   }
 }
-@MainActor final class AppDelegate: NSObject, NSApplicationDelegate {
+@MainActor final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
   let model = Model()
   private var item: NSStatusItem!
   private let popover = NSPopover()
@@ -39,11 +43,7 @@ import SwiftUI
     item.button?.action = #selector(click)
     item.button?.sendAction(on: [.leftMouseUp, .rightMouseUp])
     popover.behavior = .transient
-    let hosting = NSHostingController(
-      rootView: PopoverRoot(
-        model: model, dismiss: { [weak self] in self?.popover.performClose(nil) }))
-    hosting.sizingOptions = .preferredContentSize
-    popover.contentViewController = hosting
+    popover.delegate = self
     model.start()
     if ProcessInfo.processInfo.arguments.contains("--show-window") { NSApp.activate() }
     observeStatus()
@@ -68,7 +68,7 @@ import SwiftUI
                 anchor.orderFront(nil)
                 self.benchmarkAnchor = anchor
               }
-
+              self.preparePopover()
               if let view = self.benchmarkAnchor?.contentView {
                 self.popover.behavior = .applicationDefined
                 self.popover.show(relativeTo: view.bounds, of: view, preferredEdge: .maxY)
@@ -102,9 +102,25 @@ import SwiftUI
         try? await Task.sleep(for: .milliseconds(500))
         guard let self, let button = self.item.button else { return }
         NSApp.activate()
+        self.preparePopover()
         self.popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
       }
     }
+  }
+  private func preparePopover() {
+    guard popover.contentViewController == nil else { return }
+    let hosting = NSHostingController(
+      rootView: PopoverRoot(
+        model: model, dismiss: { [weak self] in self?.popover.performClose(nil) }))
+    hosting.sizingOptions = .preferredContentSize
+    popover.contentViewController = hosting
+  }
+  func popoverDidClose(_ notification: Notification) {
+    popover.contentViewController = nil
+    if !NSApp.windows.contains(where: { $0.title == "Menagerie" && $0.isVisible }) {
+      ServiceIcon.releaseImages()
+    }
+    WindowTiming.shared.record("popover-released")
   }
   func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
     guard !terminating else { return .terminateLater }
@@ -145,6 +161,7 @@ import SwiftUI
       popover.performClose(nil)
     } else if let button = item.button {
       NSApp.activate()
+      preparePopover()
       popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
     }
   }
