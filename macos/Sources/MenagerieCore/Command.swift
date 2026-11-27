@@ -47,7 +47,7 @@ public struct CommandResult: Sendable {
 public enum Runner {
   /// All blocking process and pipe work is confined to the calling worker task.
   public static func run(
-    _ command: Command, cancel: Cancellation = Cancellation(),
+    _ command: Command, onStart: @Sendable () -> Void = {}, cancel: Cancellation = Cancellation(),
     abandonAfterCancellation: Bool = false,
     output: @Sendable (String) -> Void = { _ in }
   ) throws -> CommandResult {
@@ -104,6 +104,7 @@ public enum Runner {
     guard error == 0 else {
       throw FleetError("Cannot start \(command.program): \(String(cString: strerror(error)))")
     }
+    onStart()
     close(input[0])
     input[0] = -1
     close(out[1])

@@ -73,9 +73,12 @@ func cancellationKillsTheWholePlanAndNeverRunsTheNextStep(script: String) async 
   _ = try Runner.git(repo.path, ["remote", "add", "origin", remote])
   _ = try Runner.git(repo.path, ["config", "status.showUntrackedFiles", "no"])
   func run(branch: String = "main") throws -> String {
-    try Runner.run(
-      Command("/bin/sh", ["-c", Deployment.pushScript(repo: repo.path, branch: branch)])
-    ).checked()
+    let output = OutputBuffer()
+    try CheckoutMutation.run(repos: [repo.path]) {
+      try Commit.pushCheckout(
+        repo: repo.path, branch: branch, cancel: Cancellation(), output: { output.append($0) })
+    }
+    return output.text
   }
   #expect(try run().contains("Nothing to push."))
   try repo.write("new", "dirty")

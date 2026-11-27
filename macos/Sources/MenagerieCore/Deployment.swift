@@ -5,6 +5,9 @@ public struct DeploymentStep: Sendable, Equatable {
   public var label: String
   public var command: Command
   public var administrator: Bool = false
+  public var checkouts: [String] = []
+  public var pushRepo: String?
+  public var pushBranch: String?
 }
 public enum Deployment {
   public enum Action: Sendable { case sync, rollback }
@@ -24,33 +27,26 @@ public enum Deployment {
   public static func run(
     _ steps: [DeploymentStep], cancel: Cancellation, output: @Sendable (String) -> Void
   ) throws {
+    try CheckoutMutation.run(repos: steps.flatMap(\.checkouts)) {
+      try runUnlocked(steps, cancel: cancel, output: output)
+    }
+  }
+  private static func runUnlocked(
+    _ steps: [DeploymentStep], cancel: Cancellation, output: @Sendable (String) -> Void
+  ) throws {
     for step in steps {
       guard !cancel.isCancelled else { throw FleetError("Cancelled") }
       output("▸ " + step.label + "\n")
+      if let repo = step.pushRepo, let branch = step.pushBranch {
+        try Commit.pushCheckout(repo: repo, branch: branch, cancel: cancel, output: output)
+        continue
+      }
       let result =
         try step.administrator
         ? Administrator.run(step.command, cancel: cancel, output: output)
         : Runner.run(step.command, cancel: cancel, output: output)
       _ = try result.checked()
     }
-  }
-  public static func pushScript(repo: String, branch: String) -> String {
-    let ref = shellQuote("refs/heads/" + branch)
-    return """
-      cd \(shellQuote(repo)) || exit 1
-      [ "$(git symbolic-ref --quiet HEAD)" = \(ref) ] || { echo 'Checkout is not on the configured branch'; exit 1; }
-      n=$(git status --porcelain --untracked-files=all --ignore-submodules=none | wc -l | tr -d ' ')
-      if [ "$n" = 1 ]; then echo '1 uncommitted file stays behind: Sync deploys commits only.'
-      elif [ "$n" -gt 1 ]; then echo "$n uncommitted files stay behind: Sync deploys commits only."
-      fi
-      git fetch -q origin \(ref) || exit 1
-      ahead=$(git rev-list --count FETCH_HEAD..HEAD) || exit 1
-      [ "$ahead" -gt 0 ] || { echo 'Nothing to push.'; exit 0; }
-      if ! git merge-base --is-ancestor FETCH_HEAD HEAD; then
-        git rebase -q --autostash FETCH_HEAD || { git rebase --abort; exit 1; }
-      fi
-      git push origin \(shellQuote("HEAD:refs/heads/" + branch))
-      """
   }
   public static func flakeURL(path: String, branch: String, attribute: String) -> String {
     var url = URLComponents()
@@ -72,18 +68,28 @@ public enum Deployment {
     }
     let local = isLocal(name, machine)
     guard local || machine.ssh != nil else { throw FleetError("\(name) has no SSH destination") }
+    let checkouts = [fleet.repoPath, local ? expandHome(sync.repo ?? ".") : nil].compactMap { $0 }
+    func prepared(_ steps: [DeploymentStep]) -> [DeploymentStep] {
+      steps.map {
+        var step = $0
+        step.checkouts = checkouts
+        return step
+      }
+    }
     var steps: [DeploymentStep] = []
     if action == .sync, let repo = fleet.repoPath {
       steps.append(
         DeploymentStep(
           label: "Push checkout commits (uncommitted changes stay behind)",
-          command: Command(
-            "/bin/sh", ["-c", pushScript(repo: repo, branch: fleet.branch)], timeout: 300)))
+          command: Command("/usr/bin/true"), pushRepo: repo, pushBranch: fleet.branch))
     }
     let repo = sync.repo ?? "."
     let attr = sync.flake ?? (sync.preset == .homeManager ? machine.ssh ?? name : name)
     let ref = shellQuote("refs/heads/" + fleet.branch)
     let pull = """
+      for marker in rebase-merge rebase-apply MERGE_HEAD CHERRY_PICK_HEAD index.lock; do
+        test ! -e "$(git rev-parse --git-path "$marker")" || { echo "Git operation in progress: $marker"; exit 1; }
+      done
       [ "$(git symbolic-ref --quiet HEAD)" = \(ref) ] || { echo 'Checkout is not on the configured branch'; exit 1; }
       git fetch origin \(ref) || exit 1
       git merge --ff-only FETCH_HEAD || exit 1
@@ -110,7 +116,7 @@ public enum Deployment {
         DeploymentStep(
           label: "Switch this Mac", command: Command(program, arguments, timeout: 3600),
           administrator: true))
-      return steps
+      return prepared(steps)
     }
     var fragment = URLComponents()
     fragment.fragment = attr
@@ -142,6 +148,6 @@ public enum Deployment {
     steps.append(
       DeploymentStep(
         label: action == .sync ? "Pull and switch \(name)" : "Roll back \(name)", command: command))
-    return steps
+    return prepared(steps)
   }
 }

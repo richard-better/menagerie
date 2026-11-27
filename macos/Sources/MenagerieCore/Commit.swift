@@ -141,9 +141,45 @@ public enum Commit {
     }
     return message
   }
+  public static func pushCheckout(
+    repo: String, branch: String, cancel: Cancellation, output: @Sendable (String) -> Void
+  ) throws {
+    guard
+      try Runner.git(repo, ["symbolic-ref", "--quiet", "HEAD"], cancel: cancel).trimmingCharacters(
+        in: .whitespacesAndNewlines) == "refs/heads/" + branch
+    else { throw FleetError("Checkout is not on the configured branch") }
+    let count = try changes(repo: repo).count
+    if count > 0 {
+      output(
+        "\(count) uncommitted \(count == 1 ? "file stays" : "files stay") behind: Sync deploys commits only.\n"
+      )
+    }
+    _ = try Runner.git(repo, ["fetch", "-q", "origin", "refs/heads/" + branch], cancel: cancel)
+    let ahead = try Runner.git(repo, ["rev-list", "--count", "FETCH_HEAD..HEAD"], cancel: cancel)
+      .trimmingCharacters(in: .whitespacesAndNewlines)
+    if ahead == "0" {
+      output("Nothing to push.\n")
+      return
+    }
+    if (try? Runner.git(
+      repo, ["merge-base", "--is-ancestor", "FETCH_HEAD", "HEAD"], cancel: cancel)) == nil
+    {
+      try CheckoutMutation.rebase(repo, cancel: cancel)
+    }
+    try CheckoutMutation.assertMerged(repo)
+    _ = try Runner.git(repo, ["push", "origin", "HEAD:refs/heads/" + branch], cancel: cancel)
+  }
   public static func commitAndPush(
     repo: String, branch: String, paths: [String], message: String,
     cancel: Cancellation = Cancellation()
+  ) throws -> String {
+    try CheckoutMutation.run(repos: [repo]) {
+      try commitAndPushUnlocked(
+        repo: repo, branch: branch, paths: paths, message: message, cancel: cancel)
+    }
+  }
+  private static func commitAndPushUnlocked(
+    repo: String, branch: String, paths: [String], message: String, cancel: Cancellation
   ) throws -> String {
     guard !message.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, !paths.isEmpty else {
       throw FleetError("Choose files and write a message first")
@@ -161,13 +197,9 @@ public enum Commit {
       if (try? Runner.git(
         repo, ["merge-base", "--is-ancestor", "FETCH_HEAD", "HEAD"], cancel: cancel)) == nil
       {
-        do {
-          _ = try Runner.git(repo, ["rebase", "-q", "--autostash", "FETCH_HEAD"], cancel: cancel)
-        } catch {
-          _ = try? Runner.git(repo, ["rebase", "--abort"])
-          throw error
-        }
+        try CheckoutMutation.rebase(repo, cancel: cancel)
       }
+      try CheckoutMutation.assertMerged(repo)
       _ = try Runner.git(
         repo, ["push", "-q", "origin", "HEAD:refs/heads/" + branch], cancel: cancel)
       return try Runner.git(repo, ["rev-parse", "--short", "HEAD"]).trimmingCharacters(
