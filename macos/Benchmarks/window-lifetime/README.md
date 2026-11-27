@@ -19,6 +19,8 @@ The probe also logs its own destruction and checks a weak reference to the windo
 
 To prepare the old source, use `git archive` into ignored directories under `target/`, not the owner's checkout. Apply the patches there with `patch -p1`. The old Rust build can reuse `GHOSTTY_SOURCE_DIR` and `CARGO_TARGET_DIR` from the isolated baseline build. The Swift archive needs the built `target/ghostty` prerequisite at its package root. Build both Swift variants with `scripts/bundle` and keep the old bundle separately as `target/Menagerie-retained.app`. Preserve all signing and deployment boundaries.
 
+The controls compile only with `-DMENAGERIE_BENCHMARK`. Build an explicitly separate benchmark executable with `swift build --package-path macos -c release -Xswiftc -DMENAGERIE_BENCHMARK`; use `--executable` to point the runner at its copied benchmark bundle. The normal `scripts/bundle` build has no signal handler, command reader, synthetic anchor, or benchmark notifications. Never replace the production bundle with a benchmark build.
+
 ## Running
 
 From the repository root, with the isolated executables and `target/window-bench-fleet.yaml` prepared:

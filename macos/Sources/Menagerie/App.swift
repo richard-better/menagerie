@@ -25,8 +25,10 @@ import SwiftUI
   private var item: NSStatusItem!
   private let popover = NSPopover()
   private var terminating = false
-  private var benchmarkSource: DispatchSourceSignal?
-  private var benchmarkAnchor: NSWindow?
+  #if MENAGERIE_BENCHMARK
+    private var benchmarkSource: DispatchSourceSignal?
+    private var benchmarkAnchor: NSWindow?
+  #endif
   func applicationDidFinishLaunching(_ notification: Notification) {
     NSApp.setActivationPolicy(.accessory)
     NSApp.appearance = NSAppearance(named: .darkAqua)
@@ -47,56 +49,58 @@ import SwiftUI
     model.start()
     if ProcessInfo.processInfo.arguments.contains("--show-window") { NSApp.activate() }
     observeStatus()
-    if ProcessInfo.processInfo.environment["MENAGERIE_WINDOW_TRACE"] != nil {
-      signal(SIGUSR1, SIG_IGN)
-      let source = DispatchSource.makeSignalSource(signal: SIGUSR1, queue: .main)
-      source.setEventHandler { [weak self] in
-        MainActor.assumeIsolated {
-          guard let path = ProcessInfo.processInfo.environment["MENAGERIE_WINDOW_TRACE"],
-            let command = try? String(contentsOfFile: path + ".command", encoding: .utf8)
-          else { return }
-          if command == "open" {
-            if let self {
-              NSApp.activate()
-              if self.benchmarkAnchor == nil {
-                let anchor = NSWindow(
-                  contentRect: NSRect(x: 20, y: 20, width: 1, height: 1), styleMask: .borderless,
-                  backing: .buffered, defer: false)
-                anchor.isOpaque = false
-                anchor.backgroundColor = .clear
-                anchor.isReleasedWhenClosed = false
-                anchor.orderFront(nil)
-                self.benchmarkAnchor = anchor
+    #if MENAGERIE_BENCHMARK
+      if ProcessInfo.processInfo.environment["MENAGERIE_WINDOW_TRACE"] != nil {
+        signal(SIGUSR1, SIG_IGN)
+        let source = DispatchSource.makeSignalSource(signal: SIGUSR1, queue: .main)
+        source.setEventHandler { [weak self] in
+          MainActor.assumeIsolated {
+            guard let path = ProcessInfo.processInfo.environment["MENAGERIE_WINDOW_TRACE"],
+              let command = try? String(contentsOfFile: path + ".command", encoding: .utf8)
+            else { return }
+            if command == "open" {
+              if let self {
+                NSApp.activate()
+                if self.benchmarkAnchor == nil {
+                  let anchor = NSWindow(
+                    contentRect: NSRect(x: 20, y: 20, width: 1, height: 1), styleMask: .borderless,
+                    backing: .buffered, defer: false)
+                  anchor.isOpaque = false
+                  anchor.backgroundColor = .clear
+                  anchor.isReleasedWhenClosed = false
+                  anchor.orderFront(nil)
+                  self.benchmarkAnchor = anchor
+                }
+                self.preparePopover()
+                if let view = self.benchmarkAnchor?.contentView {
+                  self.popover.behavior = .applicationDefined
+                  self.popover.show(relativeTo: view.bounds, of: view, preferredEdge: .maxY)
+                  WindowTiming.shared.record("popover-shown \(self.popover.isShown)")
+                  precondition(self.popover.isShown, "Benchmark requires a visible popover")
+                }
               }
-              self.preparePopover()
-              if let view = self.benchmarkAnchor?.contentView {
-                self.popover.behavior = .applicationDefined
-                self.popover.show(relativeTo: view.bounds, of: view, preferredEdge: .maxY)
-                WindowTiming.shared.record("popover-shown \(self.popover.isShown)")
-                precondition(self.popover.isShown, "Benchmark requires a visible popover")
+              DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                NotificationCenter.default.post(name: .init("MenagerieBenchmarkOpen"), object: nil)
+              }
+            } else if command == "close" {
+              if let window = NSApp.windows.first(where: {
+                $0.title == "Menagerie" && $0.canBecomeMain
+              }) {
+                if ProcessInfo.processInfo.environment["MENAGERIE_KEEP_WINDOW"] == "1" {
+                  window.orderOut(nil)
+                  WindowTiming.shared.record("window-hidden")
+                } else {
+                  window.performClose(nil)
+                }
               }
             }
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
-              NotificationCenter.default.post(name: .init("MenagerieBenchmarkOpen"), object: nil)
-            }
-          } else if command == "close" {
-            if let window = NSApp.windows.first(where: {
-              $0.title == "Menagerie" && $0.canBecomeMain
-            }) {
-              if ProcessInfo.processInfo.environment["MENAGERIE_KEEP_WINDOW"] == "1" {
-                window.orderOut(nil)
-                WindowTiming.shared.record("window-hidden")
-              } else {
-                window.performClose(nil)
-              }
-            }
+            _ = self
           }
-          _ = self
         }
+        benchmarkSource = source
+        source.resume()
       }
-      benchmarkSource = source
-      source.resume()
-    }
+    #endif
     if ProcessInfo.processInfo.arguments.contains("--show-popover") {
       Task { @MainActor [weak self] in
         try? await Task.sleep(for: .milliseconds(500))
@@ -140,9 +144,13 @@ import SwiftUI
   func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }
   private func observeStatus() {
     withObservationTracking {
-      item.button?.title =
-        (ProcessInfo.processInfo.environment["MENAGERIE_TEST_TITLE"] ?? "")
-        + (model.attention > 0 ? " \(model.attention)" : "")
+      #if MENAGERIE_BENCHMARK
+        item.button?.title =
+          (ProcessInfo.processInfo.environment["MENAGERIE_TEST_TITLE"] ?? "")
+          + (model.attention > 0 ? " \(model.attention)" : "")
+      #else
+        item.button?.title = model.attention > 0 ? " \(model.attention)" : ""
+      #endif
     } onChange: { [weak self] in
       Task { @MainActor in self?.observeStatus() }
     }
@@ -172,9 +180,12 @@ struct PopoverRoot: View {
   @Environment(\.openWindow) var openWindow
   var body: some View {
     FleetPopover(model: model, open: openFleet)
-      .onReceive(NotificationCenter.default.publisher(for: .init("MenagerieBenchmarkOpen"))) { _ in
-        openFleet()
-      }
+      #if MENAGERIE_BENCHMARK
+        .onReceive(NotificationCenter.default.publisher(for: .init("MenagerieBenchmarkOpen"))) {
+          _ in
+          openFleet()
+        }
+      #endif
   }
   private func openFleet() {
     WindowTiming.shared.begin()
