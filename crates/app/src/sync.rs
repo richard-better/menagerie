@@ -128,7 +128,6 @@ pub fn plan(action: Action, fleet: &Fleet, name: &str, place: &Place) -> Result<
         && let Some(repo) = fleet.repo_path()
     {
         let head = sh_quote(&format!("refs/heads/{}", fleet.branch()));
-        let upstream = sh_quote(&format!("refs/remotes/origin/{}", fleet.branch()));
         let refspec = sh_quote(&format!("HEAD:refs/heads/{}", fleet.branch()));
         let script = format!(
             "cd {} || exit 1\n\
@@ -141,8 +140,17 @@ pub fn plan(action: Action, fleet: &Fleet, name: &str, place: &Place) -> Result<
              elif [ \"$n\" -gt 1 ] 2>/dev/null; then\n\
              \x20 echo \"$n uncommitted files stay behind: Sync deploys commits only.\"\n\
              fi\n\
-             ahead=$(git rev-list --count {upstream}..HEAD) || exit 1\n\
-             if [ \"$ahead\" -gt 0 ]; then git push origin {refspec}; else echo 'Nothing to push.'; fi",
+             git fetch -q origin {head} || exit 1\n\
+             ahead=$(git rev-list --count FETCH_HEAD..HEAD) || exit 1\n\
+             if [ \"$ahead\" -eq 0 ]; then echo 'Nothing to push.'; exit 0; fi\n\
+             if ! git merge-base --is-ancestor FETCH_HEAD HEAD; then\n\
+             \x20 echo \"Rebasing your $ahead commit(s) onto origin.\"\n\
+             \x20 if ! git rebase -q --autostash FETCH_HEAD; then\n\
+             \x20   git rebase --abort 2>/dev/null\n\
+             \x20   echo \"Your commits don't rebase cleanly onto origin. Rebase them yourself, then sync.\" >&2; exit 1\n\
+             \x20 fi\n\
+             fi\n\
+             git push origin {refspec}",
             sh_quote(&repo.to_string_lossy()),
         );
         steps.push(Step::new(
@@ -895,7 +903,6 @@ mod tests {
         std::fs::remove_file(work.join("other.txt")).unwrap();
 
         git(&work, &["commit", "-q", "--allow-empty", "-m", "two"]);
-        git(&work, &["tag", "origin/main", "HEAD"]);
         let (lines, result) = check(&f);
         assert_eq!(result, Ok(()), "{lines:?}");
         let pushed = Command::new("git")
@@ -905,6 +912,48 @@ mod tests {
             .output()
             .unwrap();
         assert_eq!(String::from_utf8_lossy(&pushed.stdout).trim(), "two");
+
+        // Origin moved on and you committed too: your commit is rebased onto
+        // origin and pushed, never merged, and the dirty files survive.
+        let other = dir.path().join("other");
+        git(
+            dir.path(),
+            &[
+                "clone",
+                "-q",
+                origin.to_str().unwrap(),
+                other.to_str().unwrap(),
+            ],
+        );
+        git(&other, &["config", "commit.gpgsign", "false"]);
+        git(&other, &["commit", "-q", "--allow-empty", "-m", "theirs"]);
+        git(&other, &["push", "-q", "origin", "HEAD:main"]);
+        git(&work, &["commit", "-q", "--allow-empty", "-m", "mine"]);
+        std::fs::write(work.join("new.txt"), "a tool's edit").unwrap();
+        let (lines, result) = check(&f);
+        assert_eq!(result, Ok(()), "{lines:?}");
+        assert!(
+            lines.iter().any(|l| l.starts_with("Rebasing your 1")),
+            "{lines:?}"
+        );
+        let log = Command::new("git")
+            .arg("-C")
+            .arg(&origin)
+            .args(["log", "--format=%s|%p", "main"])
+            .output()
+            .unwrap();
+        let log = String::from_utf8_lossy(&log.stdout);
+        let subjects: Vec<&str> = log.lines().map(|l| l.split('|').next().unwrap()).collect();
+        assert_eq!(subjects[..2], ["mine", "theirs"], "{log}");
+        assert!(
+            log.lines()
+                .all(|l| !l.rsplit('|').next().unwrap().contains(' ')),
+            "a merge commit: {log}"
+        );
+        assert_eq!(
+            std::fs::read_to_string(work.join("new.txt")).unwrap(),
+            "a tool's edit"
+        );
     }
 
     /// With `pull.rebase` set and a dirty tree, `git pull` refuses even when

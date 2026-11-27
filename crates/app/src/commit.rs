@@ -212,8 +212,9 @@ fn clean_message(text: &str) -> Option<String> {
         .filter(|l| !l.is_empty())
 }
 
-/// Commit exactly `paths` with `message`, then push to `branch`. The
-/// checkout must be on `branch`. Returns the new commit's short hash.
+/// Commit exactly `paths` with `message`, rebase onto origin's `branch`
+/// if it has moved on, and push. The checkout must be on `branch`. Returns
+/// the pushed commit's short hash. Never makes a merge commit.
 pub fn commit_and_push(
     repo: &Path,
     branch: &str,
@@ -240,12 +241,24 @@ pub fn commit_and_push(
     let mut commit = vec!["commit", "-q", "-m", message, "--only", "--"];
     commit.extend(paths.iter().map(String::as_str));
     git_slow(repo, &commit)?;
+    let committed = git(repo, &["rev-parse", "--short", "HEAD"])?;
+    let committed = committed.trim();
+    // Onto whatever origin has meanwhile: rebased, never merged.
+    let refspec = format!("refs/heads/{branch}");
+    git_slow(repo, &["fetch", "-q", "origin", &refspec])
+        .map_err(|e| format!("Committed {committed}, but fetching origin failed: {e}"))?;
+    if git(repo, &["merge-base", "--is-ancestor", "FETCH_HEAD", "HEAD"]).is_err()
+        && let Err(e) = git_slow(repo, &["rebase", "-q", "--autostash", "FETCH_HEAD"])
+    {
+        let _ = git_slow(repo, &["rebase", "--abort"]);
+        return Err(format!(
+            "Committed {committed}, but it doesn't rebase cleanly onto origin ({e}). \
+             Rebase it yourself, then push."
+        ));
+    }
     let hash = git(repo, &["rev-parse", "--short", "HEAD"])?;
-    git_slow(
-        repo,
-        &["push", "-q", "origin", &format!("HEAD:refs/heads/{branch}")],
-    )
-    .map_err(|e| format!("Committed {}, but the push failed: {e}", hash.trim()))?;
+    git_slow(repo, &["push", "-q", "origin", &format!("HEAD:{refspec}")])
+        .map_err(|e| format!("Committed {}, but the push failed: {e}", hash.trim()))?;
     Ok(hash.trim().to_owned())
 }
 
@@ -528,6 +541,43 @@ mod tests {
         assert_eq!(left[0].path, "later.txt");
 
         assert!(commit_and_push(&work, "main", &listed, "  ").is_err());
+
+        // Origin moved on meanwhile: the new commit is rebased onto it,
+        // with no merge commit, and the uncommitted file stays.
+        let other = _dir.path().join("other");
+        run_git(
+            _dir.path(),
+            &[
+                "clone",
+                "-q",
+                origin.to_str().unwrap(),
+                other.to_str().unwrap(),
+            ],
+        );
+        run_git(&other, &["config", "commit.gpgsign", "false"]);
+        run_git(&other, &["config", "user.name", "Test"]);
+        run_git(&other, &["config", "user.email", "test@example.com"]);
+        std::fs::write(other.join("theirs.nix"), "{ }\n").unwrap();
+        run_git(&other, &["add", "-A"]);
+        run_git(&other, &["commit", "-q", "-m", "theirs"]);
+        run_git(&other, &["push", "-q", "origin", "HEAD:main"]);
+        std::fs::write(work.join("mine.nix"), "{ }\n").unwrap();
+        commit_and_push(&work, "main", &["mine.nix".into()], "mine").unwrap();
+        let log = Command::new("git")
+            .arg("-C")
+            .arg(&origin)
+            .args(["log", "--format=%s|%p", "main"])
+            .output()
+            .unwrap();
+        let log = String::from_utf8_lossy(&log.stdout);
+        let subjects: Vec<&str> = log.lines().map(|l| l.split('|').next().unwrap()).collect();
+        assert_eq!(subjects[..2], ["mine", "theirs"], "{log}");
+        assert!(
+            log.lines()
+                .all(|l| !l.rsplit('|').next().unwrap().contains(' ')),
+            "a merge commit: {log}"
+        );
+        assert!(work.join("later.txt").exists());
         run_git(&work, &["switch", "-q", "-c", "other"]);
         let err = commit_and_push(&work, "main", &["later.txt".into()], "x").unwrap_err();
         assert!(err.contains("isn't on main"), "{err}");
