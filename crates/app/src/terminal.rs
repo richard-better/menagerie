@@ -56,8 +56,14 @@ fn terminal_font(window: &Window) -> &'static str {
 const LINE_HEIGHT: f32 = 16.;
 /// Menlo's advance at 12pt, to size the grid.
 const CELL_WIDTH: f32 = 7.23;
+/// The size a shell starts at, until the view has measured its space.
 pub const COLS: u16 = 100;
 pub const ROWS: u16 = 22;
+/// The smallest grid the view shrinks a shell to.
+const MIN_COLS: u16 = 20;
+const MIN_ROWS: u16 = 4;
+/// Space between the grid and the edge of the view.
+const PAD: f32 = 10.;
 /// Output chunks the reader may get ahead of the UI by (8 KiB each).
 const QUEUE: usize = 16;
 /// Output chunks handled per UI turn before letting a frame through.
@@ -118,6 +124,12 @@ impl Screen {
 
     pub fn write(&mut self, bytes: &[u8]) {
         self.term.vt_write(bytes);
+    }
+
+    pub fn resize(&mut self, cols: u16, rows: u16, cell: (u32, u32)) -> Result<(), String> {
+        self.term
+            .resize(cols, rows, cell.0, cell.1)
+            .map_err(|e| e.to_string())
     }
 
     fn mode(&self, mode: Mode) -> bool {
@@ -400,15 +412,26 @@ impl Drop for Spawned {
     }
 }
 
+fn pty_size(cols: u16, rows: u16) -> PtySize {
+    PtySize {
+        rows,
+        cols,
+        pixel_width: 0,
+        pixel_height: 0,
+    }
+}
+
+/// How many cells fit in `width` by `height`, inside the padding.
+fn fit(width: f32, height: f32, cell: f32) -> (u16, u16) {
+    let cols = ((width - 2. * PAD) / cell).floor().max(0.) as u16;
+    let rows = ((height - 2. * PAD) / LINE_HEIGHT).floor().max(0.) as u16;
+    (cols.max(MIN_COLS), rows.max(MIN_ROWS))
+}
+
 /// Open a PTY and start the shell on it. Runs on a worker thread.
 fn spawn_shell(place: Place, dir: Option<std::path::PathBuf>) -> Result<Spawned, String> {
     let pty = native_pty_system()
-        .openpty(PtySize {
-            rows: ROWS,
-            cols: COLS,
-            pixel_width: 0,
-            pixel_height: 0,
-        })
+        .openpty(pty_size(COLS, ROWS))
         .map_err(|e| e.to_string())?;
     let mut command = match &place {
         Place::Here => {
@@ -471,7 +494,7 @@ struct Session {
     /// Bytes for the PTY, written by the writer thread.
     input: SyncSender<Vec<u8>>,
     shared: Arc<Shared>,
-    _master: Box<dyn MasterPty + Send>,
+    master: Box<dyn MasterPty + Send>,
     _reader: Task<()>,
 }
 
@@ -486,6 +509,10 @@ pub struct TerminalView {
     screen: Option<Screen>,
     lines: Vec<Vec<Run>>,
     cursor: Option<(u16, u16)>,
+    /// The grid size, in cells, that fits the view.
+    size: (u16, u16),
+    /// A cell's size in pixels, for the terminal's size reports.
+    cell_px: (u32, u32),
     session: Option<Session>,
     focus: FocusHandle,
     starting: bool,
@@ -522,6 +549,8 @@ impl TerminalView {
             screen: None,
             lines: Vec::new(),
             cursor: None,
+            size: (COLS, ROWS),
+            cell_px: (CELL_WIDTH as u32, LINE_HEIGHT as u32),
             session: None,
             focus: cx.focus_handle(),
             starting: true,
@@ -576,7 +605,8 @@ impl TerminalView {
         });
         let replies = input.clone();
         let reply_shared = shared.clone();
-        let screen = match Screen::new(COLS, ROWS, move |data| {
+        let (cols, rows) = self.size;
+        let screen = match Screen::new(cols, rows, move |data| {
             queue(&replies, &reply_shared, data.to_vec());
         }) {
             Ok(screen) => screen,
@@ -657,13 +687,42 @@ impl TerminalView {
         });
 
         spawned.adopted = true;
+        // The view may have measured its space while the shell started.
+        if (cols, rows) != (COLS, ROWS) {
+            let _ = master.resize(pty_size(cols, rows));
+        }
         self.screen = Some(screen);
         self.session = Some(Session {
             input,
             shared,
-            _master: master,
+            master,
             _reader: reader_task,
         });
+    }
+
+    /// Whether the shell has ended (or never started).
+    pub fn ended(&self) -> bool {
+        self.exited
+    }
+
+    /// Fit the grid, and the shell, to `cols` by `rows`.
+    fn resize(&mut self, cols: u16, rows: u16, cell_px: (u32, u32), cx: &mut Context<Self>) {
+        if (cols, rows) == self.size {
+            return;
+        }
+        self.size = (cols, rows);
+        self.cell_px = cell_px;
+        if let Some(screen) = &mut self.screen {
+            let _ = screen.resize(cols, rows, cell_px);
+            let (lines, cursor) = screen.snapshot();
+            self.lines = lines;
+            self.cursor = cursor;
+        }
+        if let Some(session) = &self.session {
+            // The shell hears SIGWINCH and redraws.
+            let _ = session.master.resize(pty_size(cols, rows));
+        }
+        cx.notify();
     }
 
     fn feed(&mut self, bytes: &[u8], cx: &mut Context<Self>) {
@@ -807,31 +866,47 @@ impl Render for TerminalView {
             }
             row
         });
+        // Measures the space the grid gets, after layout, and fits the
+        // shell to it.
+        let this = cx.entity().downgrade();
+        let cell_w = f32::from(cell);
+        let measure = gpui::canvas(
+            move |bounds, _, cx| {
+                let (cols, rows) = fit(
+                    f32::from(bounds.size.width),
+                    f32::from(bounds.size.height),
+                    cell_w,
+                );
+                let cell_px = (cell_w.round() as u32, LINE_HEIGHT as u32);
+                let _ = this.update(cx, |view, cx| view.resize(cols, rows, cell_px, cx));
+            },
+            |_, _, _, _| {},
+        )
+        .absolute()
+        .top_0()
+        .left_0()
+        .size_full();
         div()
             .id("terminal")
             .track_focus(&self.focus)
             .on_key_down(cx.listener(Self::on_key))
             .on_click(cx.listener(|this, _, window, _| this.focus.focus(window)))
-            .w_full()
-            .rounded(px(9.))
+            .size_full()
+            .flex()
+            .flex_col()
             .bg(rgb(0x0f0f11))
-            .border_1()
-            .border_color(if focused {
-                rgb(0x3a3a46)
-            } else {
-                theme::line()
-            })
-            // The PTY is a fixed size: narrow windows scroll sideways.
-            .overflow_x_scroll()
             .child(
                 div()
-                    .w(cell * COLS as f32 + px(20.))
-                    .h(px(LINE_HEIGHT * ROWS as f32 + 20.))
-                    .p(px(10.))
+                    .relative()
+                    .flex_1()
+                    .min_h_0()
+                    .overflow_hidden()
+                    .p(px(PAD))
                     .font_family(font)
                     .text_size(px(FONT_SIZE))
                     .line_height(px(LINE_HEIGHT))
-                    .children(rows),
+                    .children(rows)
+                    .child(measure),
             )
             .when(self.starting, |el| {
                 el.child(
@@ -901,6 +976,15 @@ mod tests {
             key_bytes("up", None, false, false, false, true),
             Some(b"\x1bOA".to_vec())
         );
+    }
+
+    #[test]
+    fn the_grid_fits_the_space_inside_the_padding() {
+        // 8 px cells: 820 - 20 padding = 800 px, 100 columns; 352 - 20 = 332
+        // px of 16 px lines, 20 rows.
+        assert_eq!(fit(820., 352., 8.), (100, 20));
+        // Too small for anything usable: the minimum, not zero.
+        assert_eq!(fit(30., 10., 8.), (MIN_COLS, MIN_ROWS));
     }
 
     #[test]
