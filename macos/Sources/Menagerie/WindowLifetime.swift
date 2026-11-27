@@ -2,7 +2,7 @@ import AppKit
 import QuartzCore
 import SwiftUI
 
-@MainActor @Observable final class WindowTiming {
+@MainActor final class WindowTiming {
   static let shared = WindowTiming()
   var sequence = 0
   private var started: CFTimeInterval?

@@ -62,8 +62,16 @@ import SwiftUI
               NotificationCenter.default.post(name: .init("MenagerieBenchmarkOpen"), object: nil)
             }
           } else if command == "close" {
-            NSApp.windows.first(where: { $0.title == "Menagerie" && $0.canBecomeMain })?
-              .performClose(nil)
+            if let window = NSApp.windows.first(where: {
+              $0.title == "Menagerie" && $0.canBecomeMain
+            }) {
+              if ProcessInfo.processInfo.environment["MENAGERIE_KEEP_WINDOW"] == "1" {
+                window.orderOut(nil)
+                WindowTiming.shared.record("window-hidden")
+              } else {
+                window.performClose(nil)
+              }
+            }
           }
           _ = self
         }
@@ -138,6 +146,9 @@ struct PopoverRoot: View {
     dismiss()
     if let window = NSApp.windows.first(where: { $0.title == "Menagerie" && $0.canBecomeMain }) {
       window.makeKeyAndOrderFront(nil)
+      DispatchQueue.main.async {
+        WindowTiming.shared.display(window, live: model.observations[model.selected]?.report != nil)
+      }
     } else {
       openWindow(id: "fleet")
     }
