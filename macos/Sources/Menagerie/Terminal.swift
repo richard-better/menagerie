@@ -13,6 +13,7 @@ import SwiftUI
     return view
   }
   let transport = PTYSession()
+  let destination: Command?
   static func command(machine: Machine, name: String) -> Command? {
     if Deployment.isLocal(name, machine) {
       return Command(
@@ -22,7 +23,8 @@ import SwiftUI
     return machine.ssh.map { Command("/usr/bin/ssh", ["-tt", "--", $0]) }
   }
   init(machine: Machine, name: String) {
-    if let command = Self.command(machine: machine, name: name) { transport.start(command) }
+    destination = Self.command(machine: machine, name: name)
+    if let destination { transport.start(destination) }
   }
   deinit { transport.stop() }
 }

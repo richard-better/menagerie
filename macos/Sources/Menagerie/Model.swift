@@ -134,6 +134,18 @@ import Observation
       }
     }
   }
+  private func reconcileTerminals(with fleet: Fleet?) {
+    for (name, session) in terminals {
+      let destination = fleet?.machines[name].flatMap {
+        TerminalSession.command(machine: $0, name: name)
+      }
+      if fleet?.machines[name] == nil || session.destination != destination {
+        session.transport.stop()
+        terminals.removeValue(forKey: name)
+      }
+    }
+    if page == "terminal", terminals[selected] == nil { page = "details" }
+  }
   func reload() async {
     let path = fleetPath
     let result = await Task.detached { () -> Result<Fleet, any Error> in
@@ -141,6 +153,7 @@ import Observation
     }.value
     switch result {
     case .success(let new):
+      reconcileTerminals(with: new)
       error = nil
       if context(for: new) != context(for: fleet) { invalidateCommitPage() }
       if new.machines != fleet?.machines || new.repo != fleet?.repo || new.branch != fleet?.branch {
@@ -155,6 +168,7 @@ import Observation
       fleet = new
       if new.machines[selected] == nil { selected = new.order.first ?? "" }
     case .failure(let failure):
+      reconcileTerminals(with: nil)
       invalidateCommitPage()
       if fleet != nil {
         generation += 1
